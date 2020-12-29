@@ -51,8 +51,8 @@ static void update_cells(uint8_t* src, uint8_t* dst, int width, int height) {
 }
 
 static void render_cells(SDL_Surface* surface, uint8_t* cells, int width, int height) {
-    for (int y = 0; y < height; y++) {
-	for (int x = 0; x < width; x++) {
+    for (int y = 1; y < height - 1; y++) {
+	for (int x = 1; x < width - 1; x++) {
 	    char* pixel = (char*) surface->pixels + y * surface->pitch + x * surface->format->BytesPerPixel;
 	    uint32_t pixel_value;
 	    if (cells[y * width + x]) {
@@ -65,57 +65,92 @@ static void render_cells(SDL_Surface* surface, uint8_t* cells, int width, int he
     }
 }
 
+typedef struct {
+    int width;
+    int height;
+    uint8_t* cells[2];
+    int iterations;
+    bool stop;
+} GolData;
+
+static int iterate_loop(void* data) {
+    GolData* gol = (GolData*) data;
+    while (true) {
+	update_cells(gol->cells[gol->iterations%2],
+		     gol->cells[(gol->iterations+1)%2],
+		     gol->width,
+		     gol->height);
+	gol->iterations++;
+
+	if (gol->stop)
+	    return 0;
+    }
+    return 0;
+}
+
+static void initialize_gol(GolData* gol, float density) {
+    gol->cells[0] = malloc(gol->width * gol->height * 2);
+    gol->cells[1] = gol->cells[0] + gol->width * gol->height;
+
+    for (int y = 0; y < gol->height; y++) {
+	for (int x = 0; x < gol->width; x++) {
+	    gol->cells[0][y * gol->width + x] = (float) rand() / RAND_MAX <= density;
+	}
+    }
+
+    copy_redundant_borders(gol->cells[0], gol->width, gol->height);
+    gol->iterations = 0;
+    gol->stop = false;
+}
+
+static void free_gol(GolData* gol) {
+    free(gol->cells[0]);
+}
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
+    if (argc != 4) {
 	return 1;
     }
     
-    const int width = atoi(argv[1]);
-    const int height = atoi(argv[2]);
-    
-    SDL_Init(SDL_INIT_VIDEO);
     srand(time(NULL));
 
-    SDL_Window* window = SDL_CreateWindow("Pathtracer",
+    GolData gol;
+    gol.width = atoi(argv[1]);
+    gol.height = atoi(argv[2]);
+    initialize_gol(&gol, atof(argv[3]));
+    
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window* window = SDL_CreateWindow("Game of life",
 					  SDL_WINDOWPOS_CENTERED,
 					  SDL_WINDOWPOS_CENTERED,
-					  width, height,
+					  gol.width, gol.height,
 					  0);
     SDL_Surface* screen = SDL_GetWindowSurface(window);
     wipe_surface(screen);
 
-    bool running = true;
+    SDL_Thread* iterate_thread = SDL_CreateThread(iterate_loop, "iterate", &gol);
 
-    uint8_t* cells[2];
-    cells[0]= malloc(width * height * 2);
-    cells[1] = cells[0] + width * height;
-
-    for (int y = 0; y < height; y++) {
-	for (int x = 0; x < width; x++) {
-	    cells[0][y * width + x] = (rand() % 100) <= 5;
-	}
-    }
-
-    copy_redundant_borders(cells[0], width, height);
-
-    int i = 0;
-    while (running) {
+    int t0 = SDL_GetTicks();
+    
+    while (!gol.stop) {
 	SDL_Event evt;
 	while (SDL_PollEvent(&evt)) {
 	    if (evt.type == SDL_QUIT) {
-		running = false;
+		gol.stop = true;
 	    }
 	}
-
-	update_cells(cells[i%2], cells[(i+1)%2], width, height);
-	render_cells(screen, cells[(i+1)%2], width, height);
+	
+	render_cells(screen, gol.cells[(gol.iterations+1)%2], gol.width, gol.height);
 	SDL_UpdateWindowSurface(window);
-
-	i++;
     }
 
-    free(cells[0]);
+    SDL_WaitThread(iterate_thread, NULL);
+    
+    int t1 = SDL_GetTicks();
+    float time_per_iteration = (float) (t1 - t0) / gol.iterations;
+    printf("%d iterations in %dms, %fms per iteration\n", gol.iterations, t1 - t0, time_per_iteration);
+
+    free_gol(&gol);
     SDL_Quit();
     return 0;
 }
