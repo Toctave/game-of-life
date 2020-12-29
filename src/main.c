@@ -231,6 +231,7 @@ static void free_gol(GolData* gol) {
 
 int main(int argc, char** argv) {
     if (argc != 4) {
+	fprintf(stderr, "Usage :\n  game_of_life <width> <height> <initial proportion of live cells>\n");
 	return 1;
     }
     
@@ -269,8 +270,8 @@ int main(int argc, char** argv) {
     SDL_WaitThread(iterate_thread, NULL);
     
     int t1 = SDL_GetTicks();
-    float time_per_iteration = (float) (t1 - t0) / gol.iterations;
-    printf("%d iterations in %dms, %fms per iteration\n", gol.iterations, t1 - t0, time_per_iteration);
+    double time_per_iteration = (double) (t1 - t0) / ((double)gol.iterations * gol.width * gol.height);
+    printf("%d iterations in %dms, %.3fns per cell per iteration\n", gol.iterations, t1 - t0, time_per_iteration * 1000. * 1000.);
 
     free_gol(&gol);
     SDL_Quit();
