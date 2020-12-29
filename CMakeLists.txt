@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(pathtracer)
+project(game_of_life)
 
 add_executable(${PROJECT_NAME})
 
