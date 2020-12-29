@@ -9,3 +9,5 @@ target_sources(${PROJECT_NAME} PRIVATE
   )
 
 target_link_libraries(${PROJECT_NAME} SDL2)
+
+target_compile_options(${PROJECT_NAME} PRIVATE -msse4.2)
