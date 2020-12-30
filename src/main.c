@@ -9,6 +9,16 @@
 
 #include <SDL2/SDL.h>
 
+typedef struct {
+    int width;
+    int height;
+    int marginx;
+    int marginy;
+    uint8_t* cells[2];
+    int iterations;
+    bool stop;
+} GolData;
+
 static void wipe_surface(SDL_Surface* surface) {
     memset(surface->pixels, 0, surface->pitch * surface->h);
 }
@@ -17,32 +27,45 @@ static uint8_t rule(uint8_t alive, uint8_t neighbours) {
     return (neighbours == 3) || (alive && (neighbours == 2));
 }
 
-static void copy_redundant_borders(uint8_t* cells, int width, int height) {
-    for (int i = 1; i < width - 1; i++) {
-	cells[i] =
-	    cells[(height - 2) * width + i];
-	cells[(height - 1) * width + i] =
-	    cells[width + i];
+static void copy_redundant_borders(GolData* gol) {
+    uint8_t* dst = gol->cells[(gol->iterations + 1) % 2];
+    
+    for (int i = gol->marginx; i < gol->width - gol->marginx; i++) {
+	for (int j = 0; j < gol->marginy; j++) {
+	    dst[j * gol->width + i] =
+		dst[(gol->height - 2 * gol->marginy + j) * gol->width + i];
+	    dst[(gol->height - gol->marginy + j) * gol->width + i] =
+		dst[(gol->marginy + j) * gol->width + i];
+	}
     }
     
-    for (int j = 0; j < height; j++) {
-	cells[j * width] =
-	    cells[(j + 1) * width - 2];
-	cells[(j + 1) * width - 1] =
-	    cells[j * width + 1];
+    for (int j = 0; j < gol->height; j++) {
+	memcpy(
+	    &dst[j * gol->width],
+	    &dst[(j + 1) * gol->width - 2 * gol->marginx],
+	    gol->marginx
+	    );
+	memcpy(
+	    &dst[(j + 1) * gol->width - gol->marginx],
+	    &dst[j * gol->width + gol->marginx],
+	    gol->marginx
+	    );
     }
 }
 
-static void update_cells(uint8_t* src, uint8_t* dst, int width, int height) {
+static void update_cells(GolData* gol) {
+    uint8_t* src = gol->cells[gol->iterations % 2];
+    uint8_t* dst = gol->cells[(gol->iterations + 1) % 2];
+    
     int neighbour_offsets[8] = {
-	-width - 1, -width, -width + 1,
+	-gol->width - 1, -gol->width, -gol->width + 1,
 	        -1,                  1,
-	 width - 1,  width,  width + 1
+	gol->width - 1,  gol->width,  gol->width + 1
     };
-    for (int j = 1; j < height - 1; j++) {
-	for (int i = 1; i < width - 1; i++) {
+    for (int j = 1; j < gol->height - 1; j++) {
+	for (int i = 1; i < gol->width - 1; i++) {
 	    int neighbours = 0;
-	    int base = j * width + i;
+	    int base = j * gol->width + i;
 	    for (int k = 0; k < 8; k++) {
 		neighbours += src[base + neighbour_offsets[k]];
 	    }
@@ -50,7 +73,7 @@ static void update_cells(uint8_t* src, uint8_t* dst, int width, int height) {
 	}
     }
 
-    copy_redundant_borders(dst, width, height);
+    copy_redundant_borders(gol);
 }
 
 static void print_m128i(__m128i a) {
@@ -62,30 +85,11 @@ static void print_m128i(__m128i a) {
     printf("]\n");
 }
 
-static void copy_redundant_borders_sse(uint8_t* cells, int width, int height) {
-    for (int i = 1; i < width - 1; i++) {
-	cells[i] =
-	    cells[(height - 2) * width + i];
-	cells[(height - 1) * width + i] =
-	    cells[width + i];
-    }
-    
-    for (int j = 0; j < height; j++) {
-	memcpy(
-	    &cells[j * width],
-	    &cells[(j + 1) * width - 32],
-	    16
-	    );
-	memcpy(
-	    &cells[(j + 1) * width - 16],
-	    &cells[(j + 1) * width + 16],
-	    16
-	    );
-    }
-}
-
-static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) {
+static void update_cells_sse(GolData* gol) {
     assert(width % 16 == 0);
+
+    uint8_t* src = gol->cells[gol->iterations % 2];
+    uint8_t* dst = gol->cells[(gol->iterations + 1) % 2];
 
     __m128i shift_left = _mm_setr_epi8(1, 2, 3, 4,
 				      5, 6, 7, 8,
@@ -104,9 +108,9 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 					-1, -1, -1, -1,
 					-1, -1, -1, -1);
 
-    for (int j = 1; j < height - 1; j++) {
-	for (int i = 16; i < width - 16; i += 16) {
-	    int base = j * width + i;
+    for (int j = gol->marginy; j < gol->height - gol->marginy; j++) {
+	for (int i = gol->marginx; i < gol->width - gol->marginx; i += 16) {
+	    int base = j * gol->width + i;
 	    __m128i* a = (__m128i*) &src[base];
 	    __m128i neighbours = _mm_setzero_si128();
 
@@ -117,7 +121,7 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 	    neighbours = _mm_adds_epu8(ar, al);
 
 	    /* Top */
-	    __m128i* top = (__m128i*) &src[base - width];
+	    __m128i* top = (__m128i*) &src[base - gol->width];
 	    __m128i topr = _mm_shuffle_epi8(*top, shift_right);
 	    __m128i topl = _mm_shuffle_epi8(*top, shift_left);
 
@@ -126,7 +130,7 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 	    neighbours = _mm_adds_epu8(neighbours, topl);
 
 	    /* Bottom */
-	    __m128i* bot = (__m128i*) &src[base + width];
+	    __m128i* bot = (__m128i*) &src[base + gol->width];
 	    __m128i botr = _mm_shuffle_epi8(*bot, shift_right);
 	    __m128i botl = _mm_shuffle_epi8(*bot, shift_left);
 
@@ -135,7 +139,7 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 	    neighbours = _mm_adds_epu8(neighbours, botl);	    
 
 	    /* borders (top-left, left, bottom-left, top-right, right, bottom-right) */
-	    __m128i* border = (__m128i*) &src[base - width - 16];
+	    __m128i* border = (__m128i*) &src[base - gol->width - 16];
 	    __m128i border_shifted = _mm_shuffle_epi8(*border, select_right);
 	    neighbours = _mm_adds_epu8(neighbours, border_shifted);
 
@@ -143,11 +147,11 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 	    border_shifted = _mm_shuffle_epi8(*border, select_right);
 	    neighbours = _mm_adds_epu8(neighbours, border_shifted);
 
-	    border = (__m128i*) &src[base + width - 16];
+	    border = (__m128i*) &src[base + gol->width - 16];
 	    border_shifted = _mm_shuffle_epi8(*border, select_right);
 	    neighbours = _mm_adds_epu8(neighbours, border_shifted);
 
-	    border = (__m128i*) &src[base - width + 16];
+	    border = (__m128i*) &src[base - gol->width + 16];
 	    border_shifted = _mm_shuffle_epi8(*border, select_left);
 	    neighbours = _mm_adds_epu8(neighbours, border_shifted);
 	    
@@ -155,7 +159,7 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 	    border_shifted = _mm_shuffle_epi8(*border, select_left);
 	    neighbours = _mm_adds_epu8(neighbours, border_shifted);
 	    
-	    border = (__m128i*) &src[base + width + 16];
+	    border = (__m128i*) &src[base + gol->width + 16];
 	    border_shifted = _mm_shuffle_epi8(*border, select_left);
 	    neighbours = _mm_adds_epu8(neighbours, border_shifted);
 
@@ -169,15 +173,16 @@ static void update_cells_sse(uint8_t* src, uint8_t* dst, int width, int height) 
 	}
     }
 
-    copy_redundant_borders_sse(dst, width, height);
+    copy_redundant_borders(gol); 
 }
 
-static void render_cells(SDL_Surface* surface, uint8_t* cells, int width, int height) {
-    for (int y = 1; y < height - 1; y++) {
-	for (int x = 1; x < width - 1; x++) {
+static void render_cells(SDL_Surface* surface, GolData* gol) {
+    uint8_t* cells = gol->cells[gol->iterations%2];
+    for (int y = 0; y < gol->height - gol->marginy * 2; y++) {
+	for (int x = 0; x < gol->width - gol->marginx * 2; x++) {
 	    char* pixel = (char*) surface->pixels + y * surface->pitch + x * surface->format->BytesPerPixel;
 	    uint32_t pixel_value;
-	    if (cells[y * width + x]) {
+	    if (cells[(y + gol->marginy) * gol->width + x + gol->marginx]) {
 		pixel_value = SDL_MapRGB(surface->format, 255, 255, 255);
 	    } else {
 		pixel_value = SDL_MapRGB(surface->format, 0, 0, 0);
@@ -187,21 +192,10 @@ static void render_cells(SDL_Surface* surface, uint8_t* cells, int width, int he
     }
 }
 
-typedef struct {
-    int width;
-    int height;
-    uint8_t* cells[2];
-    int iterations;
-    bool stop;
-} GolData;
-
 static int iterate_loop(void* data) {
     GolData* gol = (GolData*) data;
     while (true) {
-	update_cells_sse(gol->cells[gol->iterations%2],
-			 gol->cells[(gol->iterations+1)%2],
-			 gol->width,
-			 gol->height);
+	update_cells_sse(gol);
 	gol->iterations++;
 
 	if (gol->stop)
@@ -210,23 +204,75 @@ static int iterate_loop(void* data) {
     return 0;
 }
 
-static void initialize_gol(GolData* gol, float density) {
+static void initialize_gol(GolData* gol) {
     gol->cells[0] = _mm_malloc(gol->width * gol->height * 2, sizeof(__m128i));
     gol->cells[1] = gol->cells[0] + gol->width * gol->height;
 
     for (int y = 0; y < gol->height; y++) {
 	for (int x = 0; x < gol->width; x++) {
-	    gol->cells[0][y * gol->width + x] = (float) rand() / RAND_MAX <= density;
+	    gol->cells[0][y * gol->width + x] = 0;
+		/* ((float) rand() / RAND_MAX) <= density; */
 	}
     }
 
-    copy_redundant_borders(gol->cells[0], gol->width, gol->height);
     gol->iterations = 0;
     gol->stop = false;
 }
 
 static void free_gol(GolData* gol) {
     free(gol->cells[0]);
+}
+
+static void read_rle(GolData* gol, const char* filename) {
+    memset(gol->cells[0], 0, gol->width * gol->height);
+    
+    FILE* f = fopen(filename, "r");
+    if (f == NULL) {
+	return;
+    }
+
+    int m, n;
+    if (fscanf(f, "x = %d, y = %d\n", &m, &n) < 2) {
+	fclose(f);
+	return;
+    }
+
+    if (m > gol->width || n > gol->height) {
+	fclose(f);
+	return;
+    }
+
+    int x = 0;
+    int y = 0;
+    while (true) {
+	int run;
+	char tag;
+	if (fscanf(f, " %d%c", &run, &tag) < 2) {
+	    if (fscanf(f, " %c", &tag) < 1) {
+		fclose(f);
+		return;
+	    }
+	    if (tag == '!')
+		break;
+	    run = 1;
+	}
+
+	if (tag == 'b')
+	    x += run;
+	if (tag == 'o') {
+	    int idx = (y + gol->marginy) * gol->width
+		+ (x + gol->marginx);
+	    memset(&gol->cells[0][idx], 1, run);
+	    x += run;
+	}
+	if (tag == '$') {
+	    y += run;
+	    x = 0;
+	}
+    }
+
+    fclose(f);
+    copy_redundant_borders(gol);
 }
 
 int main(int argc, char** argv) {
@@ -238,15 +284,20 @@ int main(int argc, char** argv) {
     srand(time(NULL));
 
     GolData gol;
-    gol.width = atoi(argv[1]);
-    gol.height = atoi(argv[2]);
-    initialize_gol(&gol, atof(argv[3]));
+    gol.marginx = 16;
+    gol.marginy = 1;
+    gol.width = atoi(argv[1]) + gol.marginx * 2;
+    gol.height = atoi(argv[2]) + gol.marginy * 2;
+    initialize_gol(&gol);
+
+    read_rle(&gol, argv[3]);
     
     SDL_Init(SDL_INIT_VIDEO);
     SDL_Window* window = SDL_CreateWindow("Game of life",
 					  SDL_WINDOWPOS_CENTERED,
 					  SDL_WINDOWPOS_CENTERED,
-					  gol.width, gol.height,
+					  gol.width - gol.marginx * 2,
+					  gol.height - gol.marginy * 2,
 					  0);
     SDL_Surface* screen = SDL_GetWindowSurface(window);
     wipe_surface(screen);
@@ -261,9 +312,13 @@ int main(int argc, char** argv) {
 	    if (evt.type == SDL_QUIT) {
 		gol.stop = true;
 	    }
+	    if (evt.type == SDL_KEYDOWN) {
+		update_cells_sse(&gol);
+		gol.iterations++;
+	    }
 	}
 	
-	render_cells(screen, gol.cells[(gol.iterations+1)%2], gol.width, gol.height);
+	render_cells(screen, &gol);
 	SDL_UpdateWindowSurface(window);
     }
 
