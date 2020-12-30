@@ -86,7 +86,7 @@ static void print_m128i(__m128i a) {
 }
 
 static void update_cells_sse(GolData* gol) {
-    assert(width % 16 == 0);
+    assert(gol->width % 16 == 0);
 
     uint8_t* src = gol->cells[gol->iterations % 2];
     uint8_t* dst = gol->cells[(gol->iterations + 1) % 2];
@@ -219,6 +219,15 @@ static void initialize_gol(GolData* gol) {
     gol->stop = false;
 }
 
+static void fill_random(GolData* gol, float density) {
+    for (int y = 0; y < gol->height; y++) {
+	for (int x = 0; x < gol->width; x++) {
+	    gol->cells[0][y * gol->width + x] =
+		((float) rand() / RAND_MAX) <= density;
+	}
+    }
+}
+
 static void free_gol(GolData* gol) {
     free(gol->cells[0]);
 }
@@ -281,24 +290,29 @@ int main(int argc, char** argv) {
 	return 1;
     }
     
+    SDL_Init(SDL_INIT_VIDEO);
     srand(time(NULL));
 
     GolData gol;
     gol.marginx = 16;
     gol.marginy = 1;
-    gol.width = atoi(argv[1]) + gol.marginx * 2;
-    gol.height = atoi(argv[2]) + gol.marginy * 2;
-    initialize_gol(&gol);
-
-    read_rle(&gol, argv[3]);
     
-    SDL_Init(SDL_INIT_VIDEO);
+    gol.width = atoi(argv[1]) + gol.marginx * 2;
+    gol.width = gol.width - (gol.width % gol.marginx); // make it a multiple of the margin
+    
+    gol.height = atoi(argv[2]) + gol.marginy * 2;
+    gol.height = gol.height - (gol.height % gol.marginy); // make it a multiple of the margin
+    
+    
+    initialize_gol(&gol);
+    fill_random(&gol, atof(argv[3]));
+    
     SDL_Window* window = SDL_CreateWindow("Game of life",
-					  SDL_WINDOWPOS_CENTERED,
-					  SDL_WINDOWPOS_CENTERED,
-					  gol.width - gol.marginx * 2,
-					  gol.height - gol.marginy * 2,
-					  0);
+    					  SDL_WINDOWPOS_CENTERED,
+    					  SDL_WINDOWPOS_CENTERED,
+    					  gol.width - gol.marginx * 2,
+    					  gol.height - gol.marginy * 2,
+    					  0);
     SDL_Surface* screen = SDL_GetWindowSurface(window);
     wipe_surface(screen);
 
@@ -307,19 +321,16 @@ int main(int argc, char** argv) {
     int t0 = SDL_GetTicks();
     
     while (!gol.stop) {
-	SDL_Event evt;
-	while (SDL_PollEvent(&evt)) {
-	    if (evt.type == SDL_QUIT) {
-		gol.stop = true;
-	    }
-	    if (evt.type == SDL_KEYDOWN) {
-		update_cells_sse(&gol);
-		gol.iterations++;
-	    }
-	}
+    	SDL_Event evt;
+    	while (SDL_PollEvent(&evt)) {
+    	    if (evt.type == SDL_QUIT ||
+		(evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_ESCAPE)) {
+    		gol.stop = true;
+    	    }
+    	}
 	
-	render_cells(screen, &gol);
-	SDL_UpdateWindowSurface(window);
+    	render_cells(screen, &gol);
+    	SDL_UpdateWindowSurface(window);
     }
 
     SDL_WaitThread(iterate_thread, NULL);
