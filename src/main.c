@@ -58,7 +58,7 @@ static void update_cells(GolData* gol) {
     
     int neighbour_offsets[8] = {
 	-gol->width - 1, -gol->width, -gol->width + 1,
-	        -1,                  1,
+	-1,                  1,
 	gol->width - 1,  gol->width,  gol->width + 1
     };
     for (int j = 1; j < gol->height - 1; j++) {
@@ -91,18 +91,6 @@ static void render_cells(SDL_Surface* surface, GolData* gol) {
     }
 }
 
-static int iterate_loop(void* data) {
-    GolData* gol = (GolData*) data;
-    while (true) {
-	update_cells(gol);
-	gol->iterations++;
-
-	if (gol->stop)
-	    return 0;
-    }
-    return 0;
-}
-
 static void initialize_gol(GolData* gol) {
     gol->cells[0] = malloc(gol->width * gol->height * 2);
     gol->cells[1] = gol->cells[0] + gol->width * gol->height;
@@ -130,62 +118,132 @@ static void free_gol(GolData* gol) {
     free(gol->cells[0]);
 }
 
+typedef struct {
+    int width;
+    int height;
+    float density;
+    bool gui_on;
+} Options;
+
+bool parse_options(Options* options, int argc, char** argv) {
+    int i = 1;
+
+    options->width = 128;
+    options->height = 128;
+    options->density = .5;
+    options->gui_on = false;
+
+    while (i < argc) {
+	char* arg = argv[i];
+	i++;
+	
+	char* opt = NULL;
+	if (i < argc) {
+	    opt = argv[i];
+	}
+	
+	if (!strcmp(arg, "-w")) {
+	    if (!opt) {
+		return false;
+	    }
+
+	    options->width = atoi(opt);
+	    i++;
+	}
+
+	if (!strcmp(arg, "-h")) {
+	    if (!opt) {
+		return false;
+	    }
+
+	    options->height = atoi(opt);
+	    i++;
+	}
+
+	if (!strcmp(arg, "-d")) {
+	    if (!opt) {
+		return false;
+	    }
+
+	    options->density = atoi(opt);
+	    i++;
+	}
+
+	if (!strcmp(arg, "-g")) {
+	    options->gui_on = true;
+	}
+    }
+    return true;
+}
+
 int main(int argc, char** argv) {
-    if (argc != 4) {
-	fprintf(stderr, "Usage :\n  game_of_life <width> <height> <initial proportion of live cells>\n");
+    Options options;
+    if (!parse_options(&options, argc, argv)) {
+	fprintf(stderr,
+		"Usage :\n"
+		"  game_of_life [-w <width>] [-h <height>] [-d <density>] [-g]\n");
 	return 1;
     }
-    
-    SDL_Init(SDL_INIT_VIDEO);
     srand(time(NULL));
 
     GolData gol;
     gol.marginx = 1;
     gol.marginy = 1;
     
-    gol.width = atoi(argv[1]) + gol.marginx * 2;
+    gol.width = options.width + gol.marginx * 2;
     gol.width = gol.width - (gol.width % gol.marginx); // make it a multiple of the margin
     
-    gol.height = atoi(argv[2]) + gol.marginy * 2;
+    gol.height = options.height + gol.marginy * 2;
     gol.height = gol.height - (gol.height % gol.marginy); // make it a multiple of the margin
     
-    
     initialize_gol(&gol);
-    fill_random(&gol, atof(argv[3]));
-    
-    SDL_Window* window = SDL_CreateWindow("Game of life",
-    					  SDL_WINDOWPOS_CENTERED,
-    					  SDL_WINDOWPOS_CENTERED,
-    					  gol.width - gol.marginx * 2,
-    					  gol.height - gol.marginy * 2,
-    					  0);
-    SDL_Surface* screen = SDL_GetWindowSurface(window);
-    wipe_surface(screen);
+    fill_random(&gol, options.density);
 
-    SDL_Thread* iterate_thread = SDL_CreateThread(iterate_loop, "iterate", &gol);
-
-    int t0 = SDL_GetTicks();
-    
-    while (!gol.stop) {
-    	SDL_Event evt;
-    	while (SDL_PollEvent(&evt)) {
-    	    if (evt.type == SDL_QUIT ||
-		(evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_ESCAPE)) {
-    		gol.stop = true;
-    	    }
-    	}
-	
-    	render_cells(screen, &gol);
-    	SDL_UpdateWindowSurface(window);
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Surface* screen = NULL;
+    SDL_Window* window = NULL;
+    if (options.gui_on) {
+	window = SDL_CreateWindow("Game of life",
+				  SDL_WINDOWPOS_CENTERED,
+				  SDL_WINDOWPOS_CENTERED,
+				  gol.width - gol.marginx * 2,
+				  gol.height - gol.marginy * 2,
+				  0);
+	screen = SDL_GetWindowSurface(window);
+	wipe_surface(screen);
     }
 
-    SDL_WaitThread(iterate_thread, NULL);
+    int t0 = SDL_GetTicks();
+    int last_render = t0;
+    int render_period = 40; // 40ms per frame = 25 FPS
+    
+    while (!gol.stop) {
+	SDL_Event evt;
+	while (SDL_PollEvent(&evt)) {
+	    if (evt.type == SDL_QUIT ||
+		(evt.type == SDL_KEYDOWN && evt.key.keysym.sym == SDLK_ESCAPE)) {
+		gol.stop = true;
+	    }
+	}
+
+	update_cells(&gol);
+	gol.iterations++;
+
+	int now = SDL_GetTicks();
+
+	if (options.gui_on && now - last_render >= render_period) {
+	    render_cells(screen, &gol);
+	    SDL_UpdateWindowSurface(window);
+	    last_render = now;
+	}
+    }
     
     int t1 = SDL_GetTicks();
     double time_per_iteration = (double) (t1 - t0) / ((double)gol.iterations * gol.width * gol.height);
     printf("%d iterations in %dms, %.3fns per cell per iteration\n", gol.iterations, t1 - t0, time_per_iteration * 1000. * 1000.);
 
     free_gol(&gol);
+    
     SDL_Quit();
     return 0;
 }
