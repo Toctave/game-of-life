@@ -150,8 +150,7 @@ bool parse_options(Options* options, int argc, char** argv) {
 	    options->width = atoi(opt);
 	    i++;
 	}
-
-	if (!strcmp(arg, "-h")) {
+	else if (!strcmp(arg, "-h")) {
 	    if (!opt) {
 		return false;
 	    }
@@ -159,8 +158,7 @@ bool parse_options(Options* options, int argc, char** argv) {
 	    options->height = atoi(opt);
 	    i++;
 	}
-
-	if (!strcmp(arg, "-d")) {
+	else if (!strcmp(arg, "-d")) {
 	    if (!opt) {
 		return false;
 	    }
@@ -168,9 +166,11 @@ bool parse_options(Options* options, int argc, char** argv) {
 	    options->density = atoi(opt);
 	    i++;
 	}
-
-	if (!strcmp(arg, "-g")) {
+	else if (!strcmp(arg, "-g")) {
 	    options->gui_on = true;
+	}
+	else {
+	    return false;
 	}
     }
     return true;
