@@ -75,6 +75,124 @@ static void update_cells(GolData* gol) {
     copy_redundant_borders(gol);
 }
 
+static int index_of_tile(int tx, int ty, int tile_hcount) {
+    return ty * tile_hcount + x;
+}
+
+static void tile_of_index(int idx, int tile_hcount, int* tx, int* ty) {
+    *tx = idx % tile_hcount;
+    *ty = idx / tile_hcount;
+}
+
+static int rank_of_index(int idx, int node_count, int tile_hcount) {
+    return 0; // TODO
+}
+
+static int rank_of_tile(int tx, int ty, int node_count, int tile_hcount) {
+    int idx = index_of_tile(tx, ty, tile_hcount);
+    return rank_of_index(idx, node_count, tile_hcount);
+}
+
+static void update_tile(int tx, int ty, uint8_t* src, uint8_t* dst, int tile_size) {
+    int wide_size = tile_size + 2;
+
+    int neighbour_offsets[8] = {
+	-wide_size - 1, -wide_size, -wide_size + 1,
+	-1,                                      1,
+	wide_size - 1,   wide_size,  wide_size + 1
+    };
+
+    /* Update internal tile */
+    for (int j = 1; j < wide_size - 1; j++) {
+	for (int i = 1; i < wide_size - 1; i++) {
+	    int neighbours = 0;
+	    int base = j * wide_size + i;
+	    for (int k = 0; k < 8; k++) {
+		neighbours += src[base + neighbour_offsets[k]];
+	    }
+	    dst[base] = rule(src[base], neighbours);
+	}
+    }
+
+    /* --- SEND BORDER --- */
+    int my_index = index_of_tile(tx, ty);
+    int neighbour;
+    /* Send top and bottom */
+    uint8_t* top_margin = &dst[wide_size + 1];
+    neighbour = rank_of_tile(tx, ty - 1);
+    MPI_Send(top_margin, tile_size, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+
+    uint8_t* bottom_margin = &dst[wide_size * tile_size + 1];
+    neighbour = rank_of_tile(tx, ty + 1);
+    MPI_Send(bottom_margin, tile_size, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+    
+    /* Send left and right */
+    int* margin_buffer = malloc(sizeof(int) * tile_size);
+
+    /* LEFT */
+    for (int y = 1; y < wide_size - 1; y++) {
+	margin_buffer[y-1] = dst[wide_size * y + 1];
+    }
+    neighbour = rank_of_tile(tx - 1, ty);
+    MPI_Send(margin_buffer, tile_size, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+
+    /* RIGHT */
+    for (int y = 1; y < wide_size - 1; y++) {
+	margin_buffer[y-1] = dst[wide_size * y + tile_size];
+    }
+    neighbour = rank_of_tile(tx + 1, ty);
+    MPI_Send(margin_buffer, tile_size, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+
+    /* Send diagonals */
+    neighbour = rank_of_tile(tx - 1, ty - 1);
+    MPI_Send(&dst[wide_size + 1], 1, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+    
+    neighbour = rank_of_tile(tx + 1, ty - 1);
+    MPI_Send(&dst[wide_size + tile_size], 1, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+
+    neighbour = rank_of_tile(tx - 1, ty + 1);
+    MPI_Send(&dst[wide_size * tile_size + 1], 1, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+
+    neighbour = rank_of_tile(tx + 1, ty + 1);
+    MPI_Send(&dst[wide_size * tile_size + tile_size], 1, MPI_BYTE, neighbour, my_index, MPI_COMM_WORLD);
+
+    /* --- RECEIVE BORDER --- */
+    /* Recv top and bottom */
+    neighbour = rank_of_tile(tx, ty - 1);    
+    MPI_Recv(top_margin, tile_size, MPI_BYTE, neighbour, index_of_tile(tx, ty - 1), MPI_COMM_WORLD, NULL);
+
+    neighbour = rank_of_tile(tx, ty + 1);
+    MPI_Recv(bottom_margin, tile_size, MPI_BYTE, neighbour, index_of_tile(tx, ty + 1), MPI_COMM_WORLD, NULL);
+
+    /* Left and right */
+    neighbour = rank_of_tile(tx - 1, ty);
+    MPI_Recv(margin_buffer, tile_size, MPI_BYTE, neighbour, index_of_tile(tx - 1, ty), MPI_COMM_WORLD, NULL);
+    for (int y = 1; y < wide_size - 1; y++) {
+	dst[wide_size * y + 1] = margin_buffer[y-1];
+    }
+
+    neighbour = rank_of_tile(tx + 1, ty);
+    MPI_Recv(margin_buffer, tile_size, MPI_BYTE, neighbour, index_of_tile(tx + 1, ty), MPI_COMM_WORLD, NULL);
+    for (int y = 1; y < wide_size - 1; y++) {
+	dst[wide_size * y + tile_size] = margin_buffer[y-1];
+    }
+
+    /* Diagonals */
+    neighbour = rank_of_tile(tx - 1, ty - 1);
+    MPI_Recv(&dst[wide_size + 1], 1, MPI_BYTE, neighbour, index_of_tile(tx - 1, ty - 1), MPI_COMM_WORLD, NULL);
+    
+    neighbour = rank_of_tile(tx + 1, ty - 1);
+    MPI_Recv(&dst[wide_size + tile_size], 1, MPI_BYTE, neighbour, index_of_tile(tx + 1, ty - 1), MPI_COMM_WORLD, NULL);
+
+    neighbour = rank_of_tile(tx - 1, ty + 1);
+    MPI_Recv(&dst[wide_size * tile_size + 1], 1, MPI_BYTE, neighbour, index_of_tile(tx - 1, ty + 1), MPI_COMM_WORLD, NULL);
+
+    neighbour = rank_of_tile(tx + 1, ty + 1);
+    MPI_Recv(&dst[wide_size * tile_size + tile_size], 1, MPI_BYTE, neighbour, index_of_tile(tx + 1, ty + 1), MPI_COMM_WORLD, NULL);
+    
+    free(margin_buffer);
+}
+
 static void render_cells(SDL_Surface* surface, GolData* gol) {
     uint8_t* cells = gol->cells[gol->iterations%2];
     for (int y = 0; y < gol->height - gol->marginy * 2; y++) {
@@ -190,7 +308,7 @@ bool parse_options(Options* options, int argc, char** argv) {
     return true;
 }
 
-int main(int argc, char** argv) {
+int main_old(int argc, char** argv) {
     Options options;
     if (!parse_options(&options, argc, argv)) {
 	fprintf(stderr,
@@ -262,4 +380,43 @@ int main(int argc, char** argv) {
     
     SDL_Quit();
     return 0;
+}
+
+int main(int argc, char** argv) {
+    MPI_Init(&argc, &argv);
+
+    int rank, node_count;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &node_count);
+
+    int tile_size = 64;
+    
+    if (rank == 0) {
+	/* Initialize the cells */
+	Options options;
+	if (!parse_options(&options, argc, argv)) {
+	    fprintf(stderr,
+		    "Usage :\n"
+		    "  game_of_life [-w <width>] [-h <height>] [-d <density>] [-g]\n");
+	    return 1;
+	}
+	srand(time(NULL));
+	
+	GolData gol;
+	gol.width = options.width;
+    	gol.height = options.height;
+    
+	initialize_gol(&gol);
+	fill_random(&gol, options.density);
+
+	/* Scatter them to worker nodes */
+	assert(gol.width % tile_size == 0);
+	assert(gol.height % tile_size == 0);
+
+	
+    } else {
+
+    }
+
+    MPI_Finalize();    
 }
