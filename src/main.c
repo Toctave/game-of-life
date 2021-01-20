@@ -91,6 +91,20 @@ static void render_cells(SDL_Surface* surface, GolData* gol) {
     }
 }
 
+static void dump_cells(FILE* out, GolData* gol) {
+    uint8_t* cells = gol->cells[gol->iterations%2];
+    for (int y = 0; y < gol->height - gol->marginy * 2; y++) {
+	for (int x = 0; x < gol->width - gol->marginx * 2; x++) {
+	    if (cells[(y + gol->marginy) * gol->width + x + gol->marginx]) {
+		fprintf(out, "#");
+	    } else {
+		fprintf(out, ".");
+	    }
+	}
+	fprintf(out, "\n");
+    }
+}
+
 static void initialize_gol(GolData* gol) {
     gol->cells[0] = malloc(gol->width * gol->height * 2);
     gol->cells[1] = gol->cells[0] + gol->width * gol->height;
@@ -237,6 +251,8 @@ int main(int argc, char** argv) {
 	    last_render = now;
 	}
     }
+
+    dump_cells(stdout, &gol);
     
     int t1 = SDL_GetTicks();
     double time_per_iteration = (double) (t1 - t0) / ((double)gol.iterations * gol.width * gol.height);
