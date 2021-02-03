@@ -433,6 +433,7 @@ typedef struct {
     bool gui_on;
     bool output_ppm;
     int iter;
+    int seed;
 } Options;
 
 bool parse_options(Options* options, int argc, char** argv) {
@@ -443,6 +444,8 @@ bool parse_options(Options* options, int argc, char** argv) {
     options->iter = 100;
     options->density = .5;
     options->gui_on = false;
+    options->seed = time(NULL);
+    options->output_ppm = false;
 
     while (i < argc) {
 	char* arg = argv[i];
@@ -474,7 +477,7 @@ bool parse_options(Options* options, int argc, char** argv) {
 		return false;
 	    }
 
-	    options->density = atoi(opt);
+	    options->density = atof(opt);
 	    i++;
 	}
 	else if (!strcmp(arg, "-i")) {
@@ -494,6 +497,13 @@ bool parse_options(Options* options, int argc, char** argv) {
 	else if (!strcmp(arg, "--output-ppm")) {
 	    options->output_ppm = true;
 	}
+	else if (!strcmp(arg, "-s")) {
+	    if (!opt) {
+		return false;
+	    }
+	    options->seed = atoi(opt);
+	    i++;
+	}
 	else {
 	    return false;
 	}
@@ -501,46 +511,9 @@ bool parse_options(Options* options, int argc, char** argv) {
     return true;
 }
 
-int main_old(int argc, char** argv) {
-    Options options;
-    if (!parse_options(&options, argc, argv)) {
-	fprintf(stderr,
-		"Usage :\n"
-		"  game_of_life [-w <width>] [-h <height>] [-d <density>] [-g]\n");
-	return 1;
-    }
-    srand(time(NULL));
-
-    GolData gol;
-    gol.marginx = 1;
-    gol.marginy = 1;
-    
-    gol.width = options.width + gol.marginx * 2;
-    gol.width = gol.width - (gol.width % gol.marginx); // make it a multiple of the margin
-    
-    gol.height = options.height + gol.marginy * 2;
-    gol.height = gol.height - (gol.height % gol.marginy); // make it a multiple of the margin
-    
-    initialize_gol(&gol);
-    fill_random(&gol, options.density);
-
-    while (!gol.stop) {
-	update_cells(&gol);
-	gol.iterations++;
-    }
-
-    dump_cells(stdout, &gol);
-    
-    /* printf("%d iterations in %dms, %.3fns per cell per iteration\n", gol.iterations, t1 - t0, time_per_iteration * 1000. * 1000.); */
-
-    free_gol(&gol);
-    
-    return 0;
-}
-
 void init_tile(uint8_t *tile, int tile_size, float density){
     for (int i = 0; i < tile_size*tile_size; i++){
-        tile[i] = ((float) rand() / RAND_MAX) <= density;
+        tile[i] = ((float) rand()) / RAND_MAX <= density;
     }
 }
 
@@ -558,10 +531,10 @@ int main(int argc, char** argv) {
     if (!parse_options(&options, argc, argv)) {
 	fprintf(stderr,
 		"Usage :\n"
-		"  game_of_life [-w <width>] [-h <height>] [-d <density>] [-i <iter>] [-g] [--output-ppm]\n");
+		"  game_of_life [-w <width>] [-h <height>] [-d <density>] [-i <iter>] [-g] [-s <seed>] [--output-ppm]\n");
 	return 1;
     }
-    srand(time(NULL));
+    srand(options.seed);
 
     /* Init tiles and scatter them to worker nodes */
     assert(options.width % tile_size == 0);
@@ -581,7 +554,7 @@ int main(int argc, char** argv) {
 	
 	uint8_t *tmp_tile = malloc(sizeof(uint8_t) * tile_size*tile_size);
 	for (int i = 0; i < tile_vcount*tile_hcount; i++){
-	    init_tile(tmp_tile, tile_size,options.density);
+	    init_tile(tmp_tile, tile_size, options.density);
 	    MPI_Send(tmp_tile,tile_size*tile_size, MPI_BYTE, rank_of_index(i,node_count,tile_hcount),i,MPI_COMM_WORLD);
 	}
 	
