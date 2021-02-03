@@ -82,16 +82,14 @@ static void tile_of_index(int idx, int tile_hcount, int* tx, int* ty) {
 }
 
 static int rank_of_index(int idx, int node_count, int tile_hcount) {
-    return 1; // TODO
+    return 1 + idx % (node_count - 1); // TODO
 }
 
-static int tile_count_of_rank(int rank, int tile_count) { 
-    // TODO
-    if (rank == 1) {
-        return tile_count;
-    } else {
-        return 0;
-    }
+static int tile_count_of_rank(int rank, int tile_count, int node_count) {
+    int worker_count = node_count - 1;
+    
+    int bonus = (rank - 1) < (tile_count % worker_count);
+    return tile_count / worker_count + bonus;
 }
 
 static int rank_of_tile(int tx, int ty, int node_count, int tile_hcount) {
@@ -188,6 +186,8 @@ static void send_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
     send_to_neighbour(&dst[wide_size + tile_size], 1, neighbour_tx[TOPRIGHT], neighbour_ty[TOPRIGHT], my_index, node_count, tile_hcount);
     send_to_neighbour(&dst[wide_size * tile_size + 1], 1, neighbour_tx[BOTLEFT], neighbour_ty[BOTLEFT], my_index, node_count, tile_hcount);
     send_to_neighbour(&dst[wide_size * tile_size + tile_size], 1, neighbour_tx[BOTRIGHT], neighbour_ty[BOTRIGHT], my_index, node_count, tile_hcount);
+
+    free(margin_buffer);
 }
 
 static void recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_count, int tile_hcount, int tile_vcount) {
@@ -209,6 +209,13 @@ static void recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
     }
 
     /* --- RECEIVE BORDER --- */
+    int wide_size = tile_size + 2;
+    
+    uint8_t* top_margin = &dst[1];
+    uint8_t* bot_margin = &dst[wide_size * (wide_size - 1) + 1];
+
+    uint8_t* margin_buffer = malloc(sizeof(uint8_t) * tile_size);
+    
     /* Recv top and bottom */
     recv_from_neighbour(top_margin, tile_size, neighbour_tx[TOP], neighbour_ty[TOP], node_count, tile_hcount);
     recv_from_neighbour(bot_margin, tile_size, neighbour_tx[BOT], neighbour_ty[BOT], node_count, tile_hcount);
@@ -216,19 +223,39 @@ static void recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
     /* Left and right */
     recv_from_neighbour(margin_buffer, tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], node_count, tile_hcount);
     for (int y = 1; y < wide_size - 1; y++) {
-	dst[wide_size * y + 1] = margin_buffer[y-1];
+	dst[wide_size * y] = margin_buffer[y-1];
     }
 
     recv_from_neighbour(margin_buffer, tile_size, neighbour_tx[RIGHT], neighbour_ty[RIGHT], node_count, tile_hcount);
     for (int y = 1; y < wide_size - 1; y++) {
-	dst[wide_size * y + tile_size] = margin_buffer[y-1];
+	dst[wide_size * y + wide_size - 1] = margin_buffer[y-1];
     }
 
     /* Diagonals */
-    recv_from_neighbour(&dst[wide_size + 1], 1, neighbour_tx[TOPLEFT], neighbour_ty[TOPLEFT], node_count, tile_hcount);
-    recv_from_neighbour(&dst[wide_size + tile_size], 1, neighbour_tx[TOPRIGHT], neighbour_ty[TOPRIGHT], node_count, tile_hcount);
-    recv_from_neighbour(&dst[wide_size * tile_size + 1], 1, neighbour_tx[BOTLEFT], neighbour_ty[BOTLEFT], node_count, tile_hcount);
-    recv_from_neighbour(&dst[wide_size * tile_size + tile_size], 1, neighbour_tx[BOTRIGHT], neighbour_ty[BOTRIGHT], node_count, tile_hcount);
+    recv_from_neighbour(&dst[0],
+			1,
+			neighbour_tx[TOPLEFT],
+			neighbour_ty[TOPLEFT],
+			node_count,
+			tile_hcount);
+    recv_from_neighbour(&dst[wide_size - 1],
+			1,
+			neighbour_tx[TOPRIGHT],
+			neighbour_ty[TOPRIGHT],
+			node_count,
+			tile_hcount);
+    recv_from_neighbour(&dst[wide_size * (wide_size - 1)],
+			1,
+			neighbour_tx[BOTLEFT],
+			neighbour_ty[BOTLEFT],
+			node_count,
+			tile_hcount);
+    recv_from_neighbour(&dst[wide_size * wide_size - 1],
+			1,
+			neighbour_tx[BOTRIGHT],
+			neighbour_ty[BOTRIGHT],
+			node_count,
+			tile_hcount);
     
     free(margin_buffer);
 }
@@ -239,40 +266,74 @@ typedef struct {
     uint8_t* cells[2];
 } Tile;
 
+static void copy_cells_to_wide_buffer(const uint8_t* buffer, uint8_t* cells, int tile_size) {
+    int wide_size = tile_size + 2;
+
+    for (int y = 0; y < tile_size; y++) {
+	memcpy(&cells[y * wide_size + 1],
+	       &buffer[y * tile_size],
+	       tile_size * sizeof(uint8_t));
+    }
+}
+
+
 static void worker(int tx, int ty, int tile_size, int node_count, int tile_hcount, int tile_vcount, int iter) {
     int tile_count;
+    int wide_size = tile_size + 2;
     MPI_Recv(&tile_count, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, NULL);
 
     MPI_Barrier(MPI_COMM_WORLD);
 
-    // TODO : allocate larger tiles and receive only into the inside part + loop send/recv/update
-
     Tile* tiles = malloc(sizeof(Tile) * tile_count);
-    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * tile_size * tile_size * 2 * tile_count);
+    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * wide_size * wide_size * 2 * tile_count);
     
     for (int i = 0; i < tile_count; i++) {
-        tiles[i].cells[0] = &cell_buffer[tile_size * tile_size * 2 * i];
-        tiles[i].cells[1] = &cell_buffer[tile_size * tile_size * (2 * i + 1)];
+        tiles[i].cells[0] = &cell_buffer[wide_size * wide_size * 2 * i];
+        tiles[i].cells[1] = &cell_buffer[wide_size * wide_size * (2 * i + 1)];
     }
+
+    uint8_t* recv_buffer = malloc(sizeof(uint8_t) * tile_size * tile_size);
     
     for (int i = 0; i < tile_count; i++) {
         MPI_Status status;
-        MPI_Recv(tiles[i].cells[0], tile_size*tile_size, MPI_BYTE,0,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
-        
+        MPI_Recv(recv_buffer, tile_size*tile_size, MPI_BYTE,0,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
+	copy_cells_to_wide_buffer(recv_buffer, tiles[i].cells[0], tile_size);
+
         tile_of_index(status.MPI_TAG, tile_hcount, &tiles[i].x, &tiles[i].y);
     }
+
+    free(recv_buffer);
     
-    
-    for (int i = 0; i< iter; i++){
+    for (int i = 0; i < iter; i++){
+	int src_index = i % 2;
+	int dst_index = (i + 1) % 2;
+	
         for (int ti = 0; ti < tile_count; ti++) {
-            update_tile_inside(uint8_t* src, uint8_t* dst, int tile_size);
-            send_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_count, int tile_hcount, int tile_vcount);
+            send_margins(tiles[ti].x,
+			 tiles[ti].y,
+			 tiles[ti].cells[src_index],
+			 tile_size,
+			 node_count,
+			 tile_hcount,
+			 tile_vcount);
         }
         
         for (int ti = 0; ti < tile_count; ti++) {
+            recv_margins(tiles[ti].x,
+			 tiles[ti].y,
+			 tiles[ti].cells[src_index],
+			 tile_size,
+			 node_count,
+			 tile_hcount,
+			 tile_vcount);
             recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_count, int tile_hcount, int tile_vcount);
         }
-        update_tile(tx, ty, cells[i%2], cells[(i+1)%2], tile_size, node_count, tile_hcount, tile_vcount);
+
+        for (int ti = 0; ti < tile_count; ti++) {
+	    update_tile_inside(tiles[ti].cells[src_index],
+			       tiles[ti].cells[dst_index],
+			       tile_size);
+	}
     }
     
     for (int y = 0; y < tile_size; y++) {
