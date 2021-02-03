@@ -156,6 +156,8 @@ static void send_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
         neighbour_ty[i] = (neighbour_ty[i] + tile_vcount) % tile_vcount;
     }
 
+    int wide_size = tile_size + 2;
+
     /* --- SEND BORDER --- */
     int my_index = index_of_tile(tx, ty, tile_hcount);
     printf("my index is %d\n", my_index);
@@ -326,7 +328,6 @@ static void worker(int tx, int ty, int tile_size, int node_count, int tile_hcoun
 			 node_count,
 			 tile_hcount,
 			 tile_vcount);
-            recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_count, int tile_hcount, int tile_vcount);
         }
 
         for (int ti = 0; ti < tile_count; ti++) {
@@ -335,16 +336,21 @@ static void worker(int tx, int ty, int tile_size, int node_count, int tile_hcoun
 			       tile_size);
 	}
     }
+
     
-    for (int y = 0; y < tile_size; y++) {
-	    for (int x = 0; x < tile_size; x++) {
-	        if (cells[iter%2][y * tile_size + x]) {
-		        printf("#");
-	        } else {
-		        printf(".");
-	        }
+    for (int ti = 0; ti < tile_count; ti++) {
+	printf("State of tile %d :\n", ti);
+	for (int y = 1; y < wide_size - 1; y++) {
+	    for (int x = 1; x < wide_size - 1; x++) {
+		if (tiles[ti].cells[iter%2][y * wide_size + x]) {
+		    printf("#");
+		} else {
+		    printf(".");
+		}
 	    }
 	    printf("\n");
+	}
+	printf("\n\n");
     }
     
     //TODO send
