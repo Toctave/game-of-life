@@ -354,7 +354,8 @@ static void worker(int tx, int ty, int tile_size, int node_count, int tile_hcoun
     }
     
     //TODO send
-    free(cells[0]);
+    free(cell_buffer);
+    free(tiles);
 }
 
 static void dump_cells(FILE* out, GolData* gol) {
@@ -538,7 +539,7 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         // Send everyone their tile count
         for (int i = 1; i < node_count; i++) {
-            int tile_count = tile_count_of_rank(i, tile_hcount * tile_vcount);
+            int tile_count = tile_count_of_rank(i, tile_hcount * tile_vcount, node_count);
 	        MPI_Send(&tile_count, 1, MPI_INT, i, 0,MPI_COMM_WORLD);
         }
         
