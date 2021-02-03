@@ -103,16 +103,18 @@ typedef enum {
     BOTLEFT, BOT, BOTRIGHT
 } NeighbourIndex;
     
-static void send_to_neighbour(uint8_t* buffer, size_t size, int dstx, int dsty, int tag, int node_count, int tile_hcount) {
+static void send_to_neighbour(uint8_t* buffer, size_t size, int dstx, int dsty, int src_index, int node_count, int tile_hcount) {
     int neighbour = rank_of_tile(dstx, dsty, node_count, tile_hcount);
-    printf("sending tag %d to tile (%d, %d)\n", tag, dstx, dsty);
+    int tag = (src_index << 16) | index_of_tile(dstx, dsty, tile_hcount);
+    // printf("sending tag %d to tile (%d, %d)\n", tag, dstx, dsty);
     MPI_Send(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD);
 }
 
-static void recv_from_neighbour(uint8_t* buffer, size_t size, int srcx, int srcy, int node_count, int tile_hcount) {
+static void recv_from_neighbour(uint8_t* buffer, size_t size, int srcx, int srcy, int my_idx, int node_count, int tile_hcount) {
     int neighbour = rank_of_tile(srcx, srcy, node_count, tile_hcount);
-    int tag = index_of_tile(srcx, srcy, tile_hcount);
-    printf("receiving tag %d from tile (%d, %d)\n", tag, srcx, srcy);
+    int tag = (index_of_tile(srcx, srcy, tile_hcount) << 16) | my_idx;
+
+    // printf("receiving data from tile (%d, %d)\n", tag, srcx, srcy);
     MPI_Recv(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, NULL);
 }
 
@@ -127,14 +129,14 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int tile_size) {
 
     /* Update internal tile */
     for (int j = 1; j < wide_size - 1; j++) {
-	    for (int i = 1; i < wide_size - 1; i++) {
-	        int neighbours = 0;
-	        int base = j * wide_size + i;
-	        for (int k = 0; k < 8; k++) {
-		        neighbours += src[base + neighbour_offsets[k]];
-	        }
-	        dst[base] = rule(src[base], neighbours);
+	for (int i = 1; i < wide_size - 1; i++) {
+	    int neighbours = 0;
+	    int base = j * wide_size + i;
+	    for (int k = 0; k < 8; k++) {
+		neighbours += src[base + neighbour_offsets[k]];
 	    }
+	    dst[base] = rule(src[base], neighbours);
+	}
     }  
 }  
  
@@ -160,7 +162,8 @@ static void send_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
 
     /* --- SEND BORDER --- */
     int my_index = index_of_tile(tx, ty, tile_hcount);
-    printf("my index is %d\n", my_index);
+    int base_tag = (my_index << 16); 
+    // printf("my index is %d\n", my_index);
     /* Send top and bottom */
     uint8_t* top_margin = &dst[wide_size + 1];
     send_to_neighbour(top_margin, tile_size, neighbour_tx[TOP], neighbour_ty[TOP], my_index, node_count, tile_hcount);
@@ -210,6 +213,8 @@ static void recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
         neighbour_ty[i] = (neighbour_ty[i] + tile_vcount) % tile_vcount;
     }
 
+    int my_index = index_of_tile(tx, ty, tile_hcount);
+
     /* --- RECEIVE BORDER --- */
     int wide_size = tile_size + 2;
     
@@ -219,16 +224,16 @@ static void recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
     uint8_t* margin_buffer = malloc(sizeof(uint8_t) * tile_size);
     
     /* Recv top and bottom */
-    recv_from_neighbour(top_margin, tile_size, neighbour_tx[TOP], neighbour_ty[TOP], node_count, tile_hcount);
-    recv_from_neighbour(bot_margin, tile_size, neighbour_tx[BOT], neighbour_ty[BOT], node_count, tile_hcount);
+    recv_from_neighbour(top_margin, tile_size, neighbour_tx[TOP], neighbour_ty[TOP], my_index, node_count, tile_hcount);
+    recv_from_neighbour(bot_margin, tile_size, neighbour_tx[BOT], neighbour_ty[BOT], my_index, node_count, tile_hcount);
 
     /* Left and right */
-    recv_from_neighbour(margin_buffer, tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], node_count, tile_hcount);
+    recv_from_neighbour(margin_buffer, tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], my_index, node_count, tile_hcount);
     for (int y = 1; y < wide_size - 1; y++) {
 	dst[wide_size * y] = margin_buffer[y-1];
     }
 
-    recv_from_neighbour(margin_buffer, tile_size, neighbour_tx[RIGHT], neighbour_ty[RIGHT], node_count, tile_hcount);
+    recv_from_neighbour(margin_buffer, tile_size, neighbour_tx[RIGHT], neighbour_ty[RIGHT], my_index, node_count, tile_hcount);
     for (int y = 1; y < wide_size - 1; y++) {
 	dst[wide_size * y + wide_size - 1] = margin_buffer[y-1];
     }
@@ -238,24 +243,28 @@ static void recv_margins(int tx, int ty, uint8_t* dst, int tile_size, int node_c
 			1,
 			neighbour_tx[TOPLEFT],
 			neighbour_ty[TOPLEFT],
+			my_index,
 			node_count,
 			tile_hcount);
     recv_from_neighbour(&dst[wide_size - 1],
 			1,
 			neighbour_tx[TOPRIGHT],
 			neighbour_ty[TOPRIGHT],
+			my_index,
 			node_count,
 			tile_hcount);
     recv_from_neighbour(&dst[wide_size * (wide_size - 1)],
 			1,
 			neighbour_tx[BOTLEFT],
 			neighbour_ty[BOTLEFT],
+			my_index,
 			node_count,
 			tile_hcount);
     recv_from_neighbour(&dst[wide_size * wide_size - 1],
 			1,
 			neighbour_tx[BOTRIGHT],
 			neighbour_ty[BOTRIGHT],
+			my_index,
 			node_count,
 			tile_hcount);
     
@@ -268,22 +277,45 @@ typedef struct {
     uint8_t* cells[2];
 } Tile;
 
-static void copy_cells_to_wide_buffer(const uint8_t* buffer, uint8_t* cells, int tile_size) {
+static void copy_narrow_buffer_to_tile(uint8_t* tile_cells, const uint8_t* buffer, int tile_size) {
     int wide_size = tile_size + 2;
 
     for (int y = 0; y < tile_size; y++) {
-	memcpy(&cells[y * wide_size + 1],
+	memcpy(&tile_cells[y * wide_size + 1],
 	       &buffer[y * tile_size],
 	       tile_size * sizeof(uint8_t));
     }
 }
 
+static void copy_tile_to_narrow_buffer(uint8_t* buffer, const uint8_t* tile_cells, int tile_size) {
+    int wide_size = tile_size + 2;
 
-static void worker(int tx, int ty, int tile_size, int node_count, int tile_hcount, int tile_vcount, int iter) {
+    for (int y = 0; y < tile_size; y++) {
+	memcpy(&buffer[y * tile_size],
+	       &tile_cells[y * wide_size + 1],
+	       tile_size * sizeof(uint8_t));
+    }
+}
+
+void print_state_of_tile(uint8_t* cells, int tile_size) {
+    for (int y = 0; y < tile_size; y++) {
+	for (int x = 0; x < tile_size; x++) {
+	    if (cells[y * tile_size + x]) {
+		printf("#");
+	    } else {
+		printf(".");
+	    }
+	}
+	printf("\n");
+    }
+}
+
+static void worker(int rank, int tile_size, int node_count, int tile_hcount, int tile_vcount, int iter) {
     int tile_count;
     int wide_size = tile_size + 2;
     MPI_Recv(&tile_count, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, NULL);
 
+    /* printf("rank %d will receive %d tiles\n", rank, tile_count); */
     MPI_Barrier(MPI_COMM_WORLD);
 
     Tile* tiles = malloc(sizeof(Tile) * tile_count);
@@ -299,61 +331,56 @@ static void worker(int tx, int ty, int tile_size, int node_count, int tile_hcoun
     for (int i = 0; i < tile_count; i++) {
         MPI_Status status;
         MPI_Recv(recv_buffer, tile_size*tile_size, MPI_BYTE,0,MPI_ANY_TAG,MPI_COMM_WORLD,&status);
-	copy_cells_to_wide_buffer(recv_buffer, tiles[i].cells[0], tile_size);
+	copy_narrow_buffer_to_tile(tiles[i].cells[0], recv_buffer, tile_size);
 
         tile_of_index(status.MPI_TAG, tile_hcount, &tiles[i].x, &tiles[i].y);
     }
 
     free(recv_buffer);
+
+    /* printf("rank %d received tiles\n", rank); */
     
     for (int i = 0; i < iter; i++){
-	int src_index = i % 2;
-	int dst_index = (i + 1) % 2;
-	
-        for (int ti = 0; ti < tile_count; ti++) {
-            send_margins(tiles[ti].x,
-			 tiles[ti].y,
-			 tiles[ti].cells[src_index],
-			 tile_size,
-			 node_count,
-			 tile_hcount,
-			 tile_vcount);
-        }
+        int src_index = i % 2;
+        int dst_index = (i + 1) % 2;
         
-        for (int ti = 0; ti < tile_count; ti++) {
-            recv_margins(tiles[ti].x,
+	for (int ti = 0; ti < tile_count; ti++) {
+	    send_margins(tiles[ti].x,
 			 tiles[ti].y,
 			 tiles[ti].cells[src_index],
 			 tile_size,
 			 node_count,
 			 tile_hcount,
 			 tile_vcount);
-        }
+	}
+            
+	for (int ti = 0; ti < tile_count; ti++) {
+	    recv_margins(tiles[ti].x,
+			 tiles[ti].y,
+			 tiles[ti].cells[src_index],
+			 tile_size,
+			 node_count,
+			 tile_hcount,
+			 tile_vcount);
+	}
 
-        for (int ti = 0; ti < tile_count; ti++) {
-	    update_tile_inside(tiles[ti].cells[src_index],
+	for (int ti = 0; ti < tile_count; ti++) {
+            update_tile_inside(tiles[ti].cells[src_index],
 			       tiles[ti].cells[dst_index],
 			       tile_size);
-	}
+        }
     }
 
-    
+    uint8_t* send_buffer = malloc(sizeof(uint8_t) * tile_size * tile_size);
+
     for (int ti = 0; ti < tile_count; ti++) {
-	printf("State of tile %d :\n", ti);
-	for (int y = 1; y < wide_size - 1; y++) {
-	    for (int x = 1; x < wide_size - 1; x++) {
-		if (tiles[ti].cells[iter%2][y * wide_size + x]) {
-		    printf("#");
-		} else {
-		    printf(".");
-		}
-	    }
-	    printf("\n");
-	}
-	printf("\n\n");
+        copy_tile_to_narrow_buffer(send_buffer, tiles[ti].cells[iter%2], tile_size);
+        int tag = index_of_tile(tiles[ti].x, tiles[ti].y, tile_hcount);
+        MPI_Send(send_buffer, tile_size * tile_size, MPI_BYTE, 0, tag, MPI_COMM_WORLD);
     }
-    
+
     //TODO send
+    free(send_buffer);
     free(cell_buffer);
     free(tiles);
 }
@@ -404,6 +431,7 @@ typedef struct {
     int height;
     float density;
     bool gui_on;
+    bool output_ppm;
     int iter;
 } Options;
 
@@ -459,6 +487,12 @@ bool parse_options(Options* options, int argc, char** argv) {
 	}
 	else if (!strcmp(arg, "-g")) {
 	    options->gui_on = true;
+	}
+	else if (!strcmp(arg, "-g")) {
+	    options->gui_on = true;
+	}
+	else if (!strcmp(arg, "--output-ppm")) {
+	    options->output_ppm = true;
 	}
 	else {
 	    return false;
@@ -517,45 +551,100 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &node_count);
 
-    int tile_size = 64;
+    int tile_size = 16;
     
     /* Initialize the cells */
-	Options options;
-	if (!parse_options(&options, argc, argv)) {
-	    fprintf(stderr,
-		    "Usage :\n"
-		    "  game_of_life [-w <width>] [-h <height>] [-d <density>] [-i <iter>] [-g]\n");
-	    return 1;
-	}
-	srand(time(NULL));
+    Options options;
+    if (!parse_options(&options, argc, argv)) {
+	fprintf(stderr,
+		"Usage :\n"
+		"  game_of_life [-w <width>] [-h <height>] [-d <density>] [-i <iter>] [-g] [--output-ppm]\n");
+	return 1;
+    }
+    srand(time(NULL));
 
-	/* Init tiles and scatter them to worker nodes */
-	assert(options.width % tile_size == 0);
-	assert(options.height % tile_size == 0);
+    /* Init tiles and scatter them to worker nodes */
+    assert(options.width % tile_size == 0);
+    assert(options.height % tile_size == 0);
 	
-	int tile_hcount = options.width / tile_size;
-	int tile_vcount = options.height / tile_size;
+    int tile_hcount = options.width / tile_size;
+    int tile_vcount = options.height / tile_size;
     
     if (rank == 0) {
         // Send everyone their tile count
         for (int i = 1; i < node_count; i++) {
             int tile_count = tile_count_of_rank(i, tile_hcount * tile_vcount, node_count);
-	        MPI_Send(&tile_count, 1, MPI_INT, i, 0,MPI_COMM_WORLD);
+	    MPI_Send(&tile_count, 1, MPI_INT, i, 0,MPI_COMM_WORLD);
         }
         
         MPI_Barrier(MPI_COMM_WORLD);
 	
-	    for (int i = 0; i < tile_vcount*tile_hcount; i++){
-	            uint8_t *tile = malloc(sizeof(uint8_t) * tile_size*tile_size);
-	            init_tile(tile, tile_size,options.density);
-	            MPI_Send(tile,tile_size*tile_size, MPI_BYTE, rank_of_index(i,node_count,tile_hcount),i,MPI_COMM_WORLD);
-	    }
+	uint8_t *tmp_tile = malloc(sizeof(uint8_t) * tile_size*tile_size);
+	for (int i = 0; i < tile_vcount*tile_hcount; i++){
+	    init_tile(tmp_tile, tile_size,options.density);
+	    MPI_Send(tmp_tile,tile_size*tile_size, MPI_BYTE, rank_of_index(i,node_count,tile_hcount),i,MPI_COMM_WORLD);
+	}
 	
-    } else {
-    
-        int tx, ty;
-        tile_of_index(rank - 1, tile_hcount, &tx, &ty);
-        worker(tx, ty, tile_size, node_count, tile_hcount, tile_vcount, options.iter);
+	/* printf("\n--- DONE SENDING EVERYTHING ---\n"); */
+
+	uint8_t* tiles = malloc(sizeof(uint8_t) * tile_size * tile_size * tile_vcount * tile_hcount);
+	for (int i = 0; i < tile_vcount*tile_hcount; i++) {
+	    MPI_Status status;
+	    MPI_Recv(tmp_tile, tile_size*tile_size, MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+
+	    memcpy(&tiles[tile_size * tile_size * status.MPI_TAG], tmp_tile, tile_size * tile_size * sizeof(uint8_t));
+        }
+
+	if (options.output_ppm) {
+	    printf("P3\n");
+	    printf("%d %d\n", options.width + tile_hcount, options.height + tile_vcount);
+	    printf("255\n");
+
+	    for (int j = 0; j < tile_vcount; j++) {
+		for (int y = 0; y < tile_size; y++) {
+		    for (int i = 0; i < tile_hcount; i++) {
+			uint8_t* tile_row = &tiles[tile_size * tile_size * (j * tile_hcount + i) + y * tile_size];
+			for (int x = 0; x < tile_size; x++) {
+			    if (tile_row[x]) {
+				printf("255 255 255 ");
+			    } else {
+				printf("0 0 0 ");
+			    }
+			}
+			printf("255 0 0 ");
+		    }
+		    printf("\n");
+		}
+
+		for (int i = 0; i < options.width + tile_vcount; i++) {
+		    printf("255 0 0 ");
+		}
+		printf("\n");
+	    }
+	} else {
+	    for (int j = 0; j < tile_vcount; j++) {
+		for (int y = 0; y < tile_size; y++) {
+		    for (int i = 0; i < tile_hcount; i++) {
+			uint8_t* tile_row = &tiles[tile_size * tile_size * (j * tile_hcount + i) + y * tile_size];
+			for (int x = 0; x < tile_size; x++) {
+			    if (tile_row[x]) {
+				printf("#");
+			    } else {
+				printf(".");
+			    }
+			}
+			printf(" ");
+		    }
+		    printf("\n");
+		}
+		printf("\n");
+	    }
+	}
+
+	free(tmp_tile);
+	free(tiles);
+    } else{
+        worker(rank, tile_size, node_count, tile_hcount, tile_vcount, options.iter);
 
     }
 
