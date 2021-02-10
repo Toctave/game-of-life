@@ -106,17 +106,6 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int tile_size) {
     }  
 }
 
-static void print_margin(uint8_t* buffer, int tile_size) {
-    for (int i = 0; i < tile_size; i++) {
-	if (buffer[i]) {
-	    printf("#");
-	} else {
-	    printf(".");
-	}
-    }
-    printf("\n");
-}
- 
 static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd) {
     int neighbour_tx[8] = { 
         tx - 1, tx, tx + 1,
@@ -137,16 +126,14 @@ static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd)
 
     /* --- SEND MARGIN --- */
     int my_index = index_of_tile(tx, ty, gd);
-    // printf("my index is %d\n", my_index);
+
     /* Send top and bottom */
     uint8_t* top_margin = &dst[gd->wide_size + 1];
-    /* printf("[%d, %d] send top margin : ", ty, tx); */
-    /* print_margin(top_margin, tile_size); */
+
     send_to_neighbour(top_margin, gd->tile_size, neighbour_tx[TOP], neighbour_ty[TOP], my_index, gd);
 
     uint8_t* bot_margin = &dst[gd->wide_size * gd->tile_size + 1];
-    /* printf("[%d, %d] send bottom margin : ", ty, tx); */
-    /* print_margin(bot_margin, gd->tile_size); */
+
     send_to_neighbour(bot_margin, gd->tile_size, neighbour_tx[BOT], neighbour_ty[BOT], my_index, gd);
     
     /* Send left and right */
@@ -156,16 +143,13 @@ static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd)
     for (int y = 1; y < gd->wide_size - 1; y++) {
 	margin_buffer[y-1] = dst[gd->wide_size * y + 1];
     }
-    /* printf("[%d, %d] send left margin : ", ty, tx); */
-    /* print_margin(margin_buffer, gd->tile_size); */
+
     send_to_neighbour(margin_buffer, gd->tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], my_index, gd);
 
     /* RIGHT */
     for (int y = 1; y < gd->wide_size - 1; y++) {
 	margin_buffer[y-1] = dst[gd->wide_size * y + gd->tile_size];
     }
-    /* printf("[%d, %d] send right margin : ", ty, tx); */
-    /* print_margin(margin_buffer, gd->tile_size); */
     send_to_neighbour(margin_buffer, gd->tile_size, neighbour_tx[RIGHT], neighbour_ty[RIGHT], my_index, gd);
     
     /* Send diagonals */
@@ -225,25 +209,16 @@ static void recv_margins(int tx, int ty, uint8_t* cells, const GridDimensions* g
     
     /* Recv top and bottom */
     recv_from_neighbour(top_margin, gd->tile_size, neighbour_tx[TOP], neighbour_ty[TOP], my_index, gd);
-    /* printf("[%d, %d] recv top margin : ", ty, tx); */
-    /* print_margin(top_margin, gd->tile_size); */
     
     recv_from_neighbour(bot_margin, gd->tile_size, neighbour_tx[BOT], neighbour_ty[BOT], my_index, gd);
-    /* printf("[%d, %d] recv bot margin : ", ty, tx); */
-    /* print_margin(bot_margin, gd->tile_size); */
-    
 
     /* Left and right */
     recv_from_neighbour(margin_buffer, gd->tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], my_index, gd);
-    /* printf("[%d, %d] recv left margin from [%d, %d]: ", ty, tx, neighbour_ty[LEFT], neighbour_tx[LEFT]); */
-    /* print_margin(margin_buffer, gd->tile_size); */
     for (int y = 1; y < gd->wide_size - 1; y++) {
 	cells[gd->wide_size * y] = margin_buffer[y-1];
     }
 
     recv_from_neighbour(margin_buffer, gd->tile_size, neighbour_tx[RIGHT], neighbour_ty[RIGHT], my_index, gd);
-    /* printf("[%d, %d] recv right margin : ", ty, tx); */
-    /* print_margin(margin_buffer, gd->tile_size); */
     for (int y = 1; y < gd->wide_size - 1; y++) {
 	cells[gd->wide_size * y + gd->wide_size - 1] = margin_buffer[y-1];
     }
@@ -314,7 +289,6 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     int tile_count;
     MPI_Recv(&tile_count, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, NULL);
 
-    /* printf("rank %d will receive %d tiles\n", rank, tile_count); */
     MPI_Barrier(MPI_COMM_WORLD);
 
     Tile* tiles = malloc(sizeof(Tile) * tile_count);
@@ -336,11 +310,8 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     }
 
     free(recv_buffer);
-
-    /* printf("rank %d received tiles\n", rank); */
     
     for (int i = 0; i < iter; i++){
-	/* printf("---- ITERATION %d for worker %d ----\n", i, rank); */
         int src_index = i % 2;
         int dst_index = (i + 1) % 2;
         
@@ -508,7 +479,7 @@ void parse_rle_file(const char* filepath, uint8_t* tiles, const GridDimensions* 
     fgets(line_buffer, 256, file);
 
     if (sscanf(line_buffer, "x = %d, y = %d", &width, &height) != 2) {
-	fprintf(stderr, "dl;fkjhedkrygh\n");
+	fprintf(stderr, "Could not parse width and height of .rle pattern\n");
 	exit(1);
     }
     
@@ -520,23 +491,14 @@ void parse_rle_file(const char* filepath, uint8_t* tiles, const GridDimensions* 
 	int chars_read;
 
 	while (*c) {
-	    /* printf("\nchar number %d\n", c - line_buffer); */
-
 	    chars_read = 0;
 	    if (sscanf(c, "%d%n", &count, &chars_read) != 1) {
 		count = 1;
-		/* printf("no count\n"); */
-	    } else {
-		/* printf("count = %d\n", count); */
 	    }
-	    /* printf("read %d chars\n", chars_read); */
 	    c += chars_read;
 
 	    sscanf(c, "%c%n", &symbol, &chars_read);
-	    /* printf("read %d chars\n", chars_read); */
 	    c += chars_read;
-
-	    /* printf("Read %d %c\n", count, symbol); */
 
 	    uint8_t cell_state;
 
@@ -581,6 +543,57 @@ typedef struct {
     uint8_t a;
 } RGBAPixel;
 
+void save_grid_to_png(const uint8_t* tiles, const char* filepath, const GridDimensions* gd) {
+    RGBAPixel* png_data = malloc(sizeof(RGBAPixel) * gd->width * gd->height);
+    for (int j = 0; j < gd->tile_vcount; j++) {
+	for (int i = 0; i < gd->tile_hcount; i++) {
+	    const uint8_t* tile = &tiles[gd->tile_size * gd->tile_size * (j * gd->tile_hcount + i)];
+	    for (int y = 0; y < gd->tile_size; y++) {
+		const uint8_t* tile_row = &tile[y * gd->tile_size];
+		for (int x = 0; x < gd->tile_size; x++) {
+		    int pngy = j * gd->tile_size + y;
+		    int pngx = i * gd->tile_size + x;
+		    int pngi = pngy * gd->width + pngx;
+			    
+		    if (tile_row[x]) {
+			png_data[pngi] = (RGBAPixel){255, 255, 255, 255};
+		    } else if ((i + j) % 2 == 0) {
+			png_data[pngi] = (RGBAPixel){64, 64, 64, 255};
+		    } else {
+			png_data[pngi] = (RGBAPixel){32, 32, 32, 255};
+		    }
+		}
+	    }
+	}
+    }
+
+    printf("Writing png '%s'\n", filepath);
+    stbi_write_png(filepath, gd->width, gd->height, 4, png_data, gd->width * sizeof(RGBAPixel));
+    free(png_data);
+}
+
+void print_grid(const uint8_t* tiles, const GridDimensions* gd) {
+    for (int j = 0; j < gd->tile_vcount; j++) {
+	for (int y = 0; y < gd->tile_size; y++) {
+	    for (int i = 0; i < gd->tile_hcount; i++) {
+		const uint8_t* tile_row = &tiles[gd->tile_size * gd->tile_size * (j * gd->tile_hcount + i)
+						 + y * gd->tile_size];
+		for (int x = 0; x < gd->tile_size; x++) {
+		    if (tile_row[x]) {
+			printf("#");
+		    } else {
+			printf(".");
+		    }
+		}
+		printf(" ");
+	    }
+	    printf("\n");
+	}
+	printf("\n");
+    }
+
+}
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 
@@ -613,9 +626,6 @@ int main(int argc, char** argv) {
 	.node_count = node_count
     };
 	
-    int tile_hcount = options.width / options.tile_size;
-    int tile_vcount = options.height / options.tile_size;
-    
     if (rank == 0) {
         // Send everyone their tile count
         for (int i = 1; i < node_count; i++) {
@@ -634,7 +644,7 @@ int main(int argc, char** argv) {
 	}
 
 	// send initial state of cells
-	for (int i = 0; i < tile_vcount*tile_hcount; i++){
+	for (int i = 0; i < gd.tile_vcount*gd.tile_hcount; i++){
 	    MPI_Send(&tiles[i * options.tile_size * options.tile_size],
 		     options.tile_size * options.tile_size,
 		     MPI_BYTE,
@@ -646,7 +656,7 @@ int main(int argc, char** argv) {
 	/* printf("\n--- DONE SENDING EVERYTHING ---\n"); */
 
 	uint8_t *tmp_tile = malloc(sizeof(uint8_t) * options.tile_size*options.tile_size);
-	for (int i = 0; i < tile_vcount*tile_hcount; i++) {
+	for (int i = 0; i < gd.tile_vcount*gd.tile_hcount; i++) {
 	    MPI_Status status;
 	    MPI_Recv(tmp_tile, options.tile_size*options.tile_size, MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
@@ -654,49 +664,9 @@ int main(int argc, char** argv) {
         }
 
 	if (options.output_filepath) {
-	    RGBAPixel* png_data = malloc(sizeof(RGBAPixel) * options.width * options.height);
-	    for (int j = 0; j < tile_vcount; j++) {
-		for (int i = 0; i < tile_hcount; i++) {
-		    uint8_t* tile = &tiles[options.tile_size * options.tile_size * (j * tile_hcount + i)];
-		    for (int y = 0; y < options.tile_size; y++) {
-			uint8_t* tile_row = &tile[y * options.tile_size];
-			for (int x = 0; x < options.tile_size; x++) {
-			    int pngy = j * options.tile_size + y;
-			    int pngx = i * options.tile_size + x;
-			    int pngi = pngy * options.width + pngx;
-			    
-			    if (tile_row[x]) {
-				png_data[pngi] = (RGBAPixel){255, 255, 255, 255};
-			    } else if ((i + j) % 2 == 0) {
-				png_data[pngi] = (RGBAPixel){64, 64, 64, 255};
-			    } else {
-				png_data[pngi] = (RGBAPixel){32, 32, 32, 255};
-			    }
-			}
-		    }
-		}
-	    }
-
-	    printf("Writing png '%s'\n", options.output_filepath);
-	    stbi_write_png(options.output_filepath, options.width, options.height, 4, png_data, options.width * sizeof(RGBAPixel));
+	    save_grid_to_png(tiles, options.output_filepath, &gd);
 	} else {
-	    for (int j = 0; j < tile_vcount; j++) {
-		for (int y = 0; y < options.tile_size; y++) {
-		    for (int i = 0; i < tile_hcount; i++) {
-			uint8_t* tile_row = &tiles[options.tile_size * options.tile_size * (j * tile_hcount + i) + y * options.tile_size];
-			for (int x = 0; x < options.tile_size; x++) {
-			    if (tile_row[x]) {
-				printf("#");
-			    } else {
-				printf(".");
-			    }
-			}
-			printf(" ");
-		    }
-		    printf("\n");
-		}
-		printf("\n");
-	    }
+	    print_grid(tiles, &gd);
 	}
 
 	free(tmp_tile);
