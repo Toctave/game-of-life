@@ -159,7 +159,7 @@ void parse_rle_file(const char* filepath, uint8_t* tiles, const GridDimensions* 
 	    case '!':
 		return;
 	    default:
-		break;
+		return;
 	    }
 
 	    for (int x = cx; x < cx + count; x++) {
