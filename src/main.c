@@ -63,6 +63,22 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int tile_size) {
     }  
 }
 
+#define SEND_MARGIN(ptr, direction) \
+    send_to_neighbour(ptr, \
+		      gd->tile_size, \
+		      neighbour_tx[direction], \
+		      neighbour_ty[direction], \
+		      my_index, \
+		      gd)
+#define SEND_CORNER(ptr, direction) \
+    send_to_neighbour(ptr,	\
+		      1,			\
+		      neighbour_tx[direction],	\
+		      neighbour_ty[direction],	\
+		      my_index,			\
+		      gd);
+
+
 static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd) {
     int neighbour_tx[8] = { 
         tx - 1, tx, tx + 1,
@@ -86,12 +102,10 @@ static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd)
 
     /* Send top and bottom */
     uint8_t* top_margin = &dst[gd->wide_size + 1];
-
-    send_to_neighbour(top_margin, gd->tile_size, neighbour_tx[TOP], neighbour_ty[TOP], my_index, gd);
+    SEND_MARGIN(top_margin, TOP);
 
     uint8_t* bot_margin = &dst[gd->wide_size * gd->tile_size + 1];
-
-    send_to_neighbour(bot_margin, gd->tile_size, neighbour_tx[BOT], neighbour_ty[BOT], my_index, gd);
+    SEND_MARGIN(bot_margin, BOT);
     
     /* Send left and right */
     uint8_t* margin_buffer = malloc(sizeof(uint8_t) * gd->tile_size);
@@ -100,43 +114,41 @@ static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd)
     for (int y = 1; y < gd->wide_size - 1; y++) {
 	margin_buffer[y-1] = dst[gd->wide_size * y + 1];
     }
-
-    send_to_neighbour(margin_buffer, gd->tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], my_index, gd);
+    SEND_MARGIN(margin_buffer, LEFT);
 
     /* RIGHT */
     for (int y = 1; y < gd->wide_size - 1; y++) {
 	margin_buffer[y-1] = dst[gd->wide_size * y + gd->tile_size];
     }
-    send_to_neighbour(margin_buffer, gd->tile_size, neighbour_tx[RIGHT], neighbour_ty[RIGHT], my_index, gd);
+    SEND_MARGIN(margin_buffer, RIGHT);
     
     /* Send diagonals */
-    send_to_neighbour(&dst[gd->wide_size + 1],
-		      1,
-		      neighbour_tx[TOPLEFT],
-		      neighbour_ty[TOPLEFT],
-		      my_index,
-		      gd);
-    send_to_neighbour(&dst[gd->wide_size + gd->tile_size],
-		      1,
-		      neighbour_tx[TOPRIGHT],
-		      neighbour_ty[TOPRIGHT],
-		      my_index,
-		      gd);
-    send_to_neighbour(&dst[gd->wide_size * gd->tile_size + 1],
-		      1,
-		      neighbour_tx[BOTLEFT],
-		      neighbour_ty[BOTLEFT],
-		      my_index,
-		      gd);
-    send_to_neighbour(&dst[gd->wide_size * gd->tile_size + gd->tile_size],
-		      1,
-		      neighbour_tx[BOTRIGHT],
-		      neighbour_ty[BOTRIGHT],
-		      my_index,
-		      gd);
+    SEND_CORNER(&dst[gd->wide_size + 1], TOPLEFT);
+    SEND_CORNER(&dst[gd->wide_size + gd->tile_size], TOPRIGHT);
+    SEND_CORNER(&dst[gd->wide_size * gd->tile_size + 1], BOTLEFT);
+    SEND_CORNER(&dst[gd->wide_size * gd->tile_size + gd->tile_size], BOTRIGHT);
 
     free(margin_buffer);
 }
+
+#undef SEND_CORNER
+#undef SEND_MARGIN
+
+#define RECV_MARGIN(ptr, direction)			\
+    recv_from_neighbour(ptr,				\
+			gd->tile_size,			\
+			neighbour_tx[direction],	\
+			neighbour_ty[direction],	\
+			my_index,			\
+			gd);
+
+#define RECV_CORNER(ptr, direction)			\
+    recv_from_neighbour(ptr,				\
+			1,				\
+			neighbour_tx[direction],	\
+			neighbour_ty[direction],	\
+			my_index,			\
+			gd);
 
 static void recv_margins(int tx, int ty, uint8_t* cells, const GridDimensions* gd) {
     int neighbour_tx[8] = { 
@@ -165,8 +177,8 @@ static void recv_margins(int tx, int ty, uint8_t* cells, const GridDimensions* g
     uint8_t* margin_buffer = malloc(sizeof(uint8_t) * gd->tile_size);
     
     /* Recv top and bottom */
-    recv_from_neighbour(top_margin, gd->tile_size, neighbour_tx[TOP], neighbour_ty[TOP], my_index, gd);
-    recv_from_neighbour(bot_margin, gd->tile_size, neighbour_tx[BOT], neighbour_ty[BOT], my_index, gd);
+    RECV_MARGIN(top_margin, TOP);
+    RECV_MARGIN(bot_margin, BOT);
 
     /* Left and right */
     recv_from_neighbour(margin_buffer, gd->tile_size, neighbour_tx[LEFT], neighbour_ty[LEFT], my_index, gd);
@@ -180,33 +192,16 @@ static void recv_margins(int tx, int ty, uint8_t* cells, const GridDimensions* g
     }
 
     /* Diagonals */
-    recv_from_neighbour(&cells[0],
-			1,
-			neighbour_tx[TOPLEFT],
-			neighbour_ty[TOPLEFT],
-			my_index,
-			gd);
-    recv_from_neighbour(&cells[gd->wide_size - 1],
-			1,
-			neighbour_tx[TOPRIGHT],
-			neighbour_ty[TOPRIGHT],
-			my_index,
-			gd);
-    recv_from_neighbour(&cells[gd->wide_size * (gd->wide_size - 1)],
-			1,
-			neighbour_tx[BOTLEFT],
-			neighbour_ty[BOTLEFT],
-			my_index,
-			gd);
-    recv_from_neighbour(&cells[gd->wide_size * gd->wide_size - 1],
-			1,
-			neighbour_tx[BOTRIGHT],
-			neighbour_ty[BOTRIGHT],
-			my_index,
-			gd);
+    RECV_CORNER(&cells[0], TOPLEFT);
+    RECV_CORNER(&cells[gd->wide_size - 1], TOPRIGHT);
+    RECV_CORNER(&cells[gd->wide_size * (gd->wide_size - 1)], BOTLEFT);
+    RECV_CORNER(&cells[gd->wide_size * gd->wide_size - 1], BOTRIGHT);
     
     free(margin_buffer);
 }
+
+#undef RECV_CORNER
+#undef RECV_MARGIN
 
 static void copy_narrow_buffer_to_tile(uint8_t* tile_cells, const uint8_t* buffer, int tile_size) {
     int wide_size = tile_size + 2;
