@@ -16,7 +16,9 @@ typedef struct {
     int seed;
     char* input_filepath;
     char* output_filepath;
+    
     int tile_size;
+    int margin_width;
 } Options;
 
 bool parse_options(Options* options, int argc, char** argv);

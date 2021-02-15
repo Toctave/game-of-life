@@ -7,6 +7,7 @@ typedef struct {
     int tile_vcount;
     int tile_size;
     int wide_size; // == tile_size + 2
+    int margin_width;
 
     int node_count;
 } GridDimensions;

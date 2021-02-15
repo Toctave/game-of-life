@@ -20,6 +20,7 @@ bool parse_options(Options* options, int argc, char** argv) {
     options->input_filepath = NULL;
     options->output_filepath = NULL;
     options->tile_size = 16;
+    options->margin_width = 1;
 
     while (i < argc) {
 	char* arg = argv[i];
