@@ -31,7 +31,7 @@ typedef enum {
     BOTLEFT, BOT, BOTRIGHT,
     NEIGHBOUR_INDEX_COUNT,
 } NeighbourIndex;
-    
+
 static void send_to_neighbour(uint8_t* buffer, size_t size, int dstx, int dsty, int my_index, const GridDimensions* gd) {
     int neighbour = rank_of_tile(dstx, dsty, gd);
     int tag = (my_index << 16) | index_of_tile(dstx, dsty, gd);
@@ -68,21 +68,6 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int ma
         }
     }  
 }
-
-#define SEND_MARGIN(ptr, direction)             \
-    send_to_neighbour(ptr,                      \
-                      gd->tile_size,            \
-                      neighbour_tx[direction],  \
-                      neighbour_ty[direction],  \
-                      my_index,                 \
-                      gd)
-#define SEND_CORNER(ptr, direction)             \
-    send_to_neighbour(ptr,                      \
-                      1,                        \
-                      neighbour_tx[direction],	\
-                      neighbour_ty[direction],	\
-                      my_index,                 \
-                      gd);
 
 static void copy_sub_grid(const uint8_t* cells, int wide_size, Rect rect, uint8_t* buffer) {
     int row_length = (rect.max.x - rect.min.x);
@@ -174,9 +159,6 @@ static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd)
     }
     free(margin_buffer);
 }
-
-#undef SEND_CORNER
-#undef SEND_MARGIN
 
 #define RECV_MARGIN(ptr, direction)                 \
     recv_from_neighbour(ptr,                        \
