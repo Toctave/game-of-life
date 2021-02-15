@@ -71,12 +71,11 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int ma
 
 static void copy_sub_grid(const uint8_t* cells, int wide_size, Rect rect, uint8_t* buffer) {
     int row_length = (rect.max.x - rect.min.x);
-    int buffer_offset = 0;
     for (int y = rect.min.y; y < rect.max.y; y++) {
         int cells_offset = y * wide_size + rect.min.x;
-
+        int buffer_offset = (y - rect.min.y) * row_length;
+        
         memcpy(buffer + buffer_offset, cells + cells_offset, row_length);
-        buffer_offset += row_length;
     }
 }
 
