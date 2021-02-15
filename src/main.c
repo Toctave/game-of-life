@@ -46,18 +46,19 @@ static void recv_from_neighbour(uint8_t* buffer, size_t size, int srcx, int srcy
     MPI_Recv(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, NULL);
 }
 
-static void update_tile_inside(uint8_t* src, uint8_t* dst, int tile_size) {
-    int wide_size = tile_size + 2;
-
+static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int margin_width) {
     int neighbour_offsets[8] = {
         -wide_size - 1, -wide_size, -wide_size + 1,
         -1,                                      1,
         wide_size - 1,   wide_size,  wide_size + 1
     };
 
+    int start = margin_width;
+    int end = wide_size - margin_width;
+
     /* Update internal tile */
-    for (int j = 1; j < wide_size - 1; j++) {
-        for (int i = 1; i < wide_size - 1; i++) {
+    for (int j = start; j < end; j++) {
+        for (int i = start; i < end; i++) {
             int neighbours = 0;
             int base = j * wide_size + i;
             for (int k = 0; k < 8; k++) {
@@ -322,9 +323,14 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
         double t2 = MPI_Wtime();
 	
         for (int ti = 0; ti < tile_count; ti++) {
-            update_tile_inside(tiles[ti].cells[src_index],
-                               tiles[ti].cells[dst_index],
-                               gd->tile_size);
+            for (int growing_margin = 1;
+                 growing_margin <= gd->margin_width;
+                 growing_margin++) {
+                update_tile_inside(tiles[ti].cells[src_index],
+                                   tiles[ti].cells[dst_index],
+                                   gd->wide_size,
+                                   growing_margin);
+            }
         }
 	
         double t3 = MPI_Wtime();
