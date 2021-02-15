@@ -84,45 +84,23 @@ static void unpack_sub_grid(uint8_t* cells, int wide_size, Rect rect, const uint
     }
 }
 
-static void debug_print_sub_region(uint8_t* cells, Rect rect) {
-    int row_length = (rect.max.x - rect.min.x);
-    for (int y = rect.min.y; y < rect.max.y; y++) {
-        for (int x = rect.min.x; x < rect.max.x; x++) {
-            uint8_t cell = cells[(y - rect.min.y) * row_length + x - rect.min.x];
-            printf("%c", cell ? '#' : '.');
-        }
-        printf("\n");
-    }
-    printf("\n");
-}
-
 static void send_margins(Tile* tile, int src_index, const GridDimensions* gd) {
-    uint8_t* dst = tile->cells[src_index];
+    uint8_t* cells = tile->cells[src_index];
     
     int my_index = index_of_tile(tile->pos, gd);
 
-    const char* neighbour_labels[] = { "TOPLEFT", "TOP", "TOPRIGHT",
-                                       "LEFT", "RIGHT",
-                                       "BOTLEFT", "BOT", "BOTRIGHT"
-    };
-    
     for (NeighbourIndex i = 0; i < NEIGHBOUR_INDEX_COUNT; i++) {
         Vec2i nb = neighbour_tile(tile->pos, i, gd);        
-        pack_sub_grid(dst,
+        pack_sub_grid(cells,
                       gd->wide_size,
                       gd->subregions_send[i],
                       tile->margin_buffers_send[i]);
-        /* printf("About to send %d bytes to %s (%d, %d)\n", */
-        /*        gd->subregion_sizes[i], */
-        /*        neighbour_labels[i], */
-        /*        nb.x, nb.y); */
         send_to_neighbour(tile->margin_buffers_send[i],	
                           gd->subregion_sizes[i],			
                           nb,
                           my_index,			
                           gd,
                           &tile->send_requests[i]);
-        /* printf("Sent to %s\n", neighbour_labels[i]); */
     }
 }
 
@@ -133,7 +111,7 @@ static void wait_for_send_completion(Tile* tile) {
 }
 
 static void recv_margins(Tile* tile, int src_index, const GridDimensions* gd) {
-    uint8_t* dst = tile->cells[src_index];
+    uint8_t* cells = tile->cells[src_index];
     
     int my_index = index_of_tile(tile->pos, gd);
 
@@ -144,7 +122,7 @@ static void recv_margins(Tile* tile, int src_index, const GridDimensions* gd) {
                             nb,
                             my_index,			
                             gd);
-        unpack_sub_grid(dst,
+        unpack_sub_grid(cells,
                         gd->wide_size,
                         gd->subregions_recv[i],
                         tile->margin_buffers_recv[i]);
@@ -275,8 +253,6 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
 
     free(send_buffer);
     free(cell_buffer);
-
-    
     free(tiles);
 
     printf("[Worker %d] total time %gs, init %gs, loop : (send %gs, receive %gs, update %gs), finalize %gs\n",
