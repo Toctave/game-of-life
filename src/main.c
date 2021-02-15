@@ -7,8 +7,7 @@
 #include "geometry.h"
 
 typedef struct {
-    int x;
-    int y;
+    Vec2i pos;
     uint8_t* cells[2];
     uint8_t* margin_buffers_send[8];
     uint8_t* margin_buffers_recv[8];
@@ -19,28 +18,24 @@ static uint8_t rule(uint8_t alive, uint8_t neighbours) {
     return (neighbours == 3) || (alive && (neighbours == 2));
 }
 
-typedef enum {
-    TOPLEFT, TOP, TOPRIGHT,
-    LEFT, RIGHT,
-    BOTLEFT, BOT, BOTRIGHT,
-    NEIGHBOUR_INDEX_COUNT,
-} NeighbourIndex;
-
 static void send_to_neighbour(uint8_t* buffer,
                               size_t size,
-                              int dstx,
-                              int dsty,
+                              Vec2i dst_pos,
                               int my_index,
                               const GridDimensions* gd,
                               MPI_Request* req) {
-    int neighbour = rank_of_tile(dstx, dsty, gd);
-    int tag = (my_index << 16) | index_of_tile(dstx, dsty, gd);
+    int neighbour = rank_of_tile(dst_pos, gd);
+    int tag = (my_index << 16) | index_of_tile(dst_pos, gd);
     MPI_Isend(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, req);
 }
 
-static void recv_from_neighbour(uint8_t* buffer, size_t size, int srcx, int srcy, int my_index, const GridDimensions* gd) {
-    int neighbour = rank_of_tile(srcx, srcy, gd);
-    int tag = (index_of_tile(srcx, srcy, gd) << 16) | my_index;
+static void recv_from_neighbour(uint8_t* buffer,
+                                size_t size,
+                                Vec2i src_pos,
+                                int my_index,
+                                const GridDimensions* gd) {
+    int neighbour = rank_of_tile(src_pos, gd);
+    int tag = (index_of_tile(src_pos, gd) << 16) | my_index;
 
     // printf("receiving data from tile (%d, %d)\n", tag, srcx, srcy);
     MPI_Recv(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, NULL);
@@ -101,53 +96,10 @@ static void debug_print_sub_region(uint8_t* cells, Rect rect) {
     printf("\n");
 }
 
-
-static Vec2i neighbour_tile(Vec2i tile, NeighbourIndex idx, const GridDimensions* gd) {
-    Vec2i co = tile;
-    
-    switch (idx) {
-    case TOPLEFT:
-        co.y--;
-        co.x--;
-        break;
-    case TOP:
-        co.y--;
-        break;
-    case TOPRIGHT:
-        co.y--;
-        co.x++;
-        break;
-    case LEFT:
-        co.x--;
-        break;
-    case RIGHT:
-        co.x++;
-        break;
-    case BOTLEFT:
-        co.y++;
-        co.x--;
-        break;
-    case BOT:
-        co.y++;
-        break;
-    case BOTRIGHT:
-        co.y++;
-        co.x++;
-        break;
-    default:
-        return tile;
-    }
-
-    co.x = (co.x + gd->tile_hcount) % gd->tile_hcount;
-    co.y = (co.y + gd->tile_vcount) % gd->tile_vcount;
-
-    return co;
-}
-
 static void send_margins(Tile* tile, int src_index, const GridDimensions* gd) {
     uint8_t* dst = tile->cells[src_index];
     
-    int my_index = index_of_tile(tile->x, tile->y, gd);
+    int my_index = index_of_tile(tile->pos, gd);
 
     const char* neighbour_labels[] = { "TOPLEFT", "TOP", "TOPRIGHT",
                                        "LEFT", "RIGHT",
@@ -155,7 +107,7 @@ static void send_margins(Tile* tile, int src_index, const GridDimensions* gd) {
     };
     
     for (NeighbourIndex i = 0; i < NEIGHBOUR_INDEX_COUNT; i++) {
-        Vec2i nb = neighbour_tile((Vec2i){tile->x, tile->y}, i, gd);        
+        Vec2i nb = neighbour_tile(tile->pos, i, gd);        
         pack_sub_grid(dst,
                       gd->wide_size,
                       gd->subregions_send[i],
@@ -166,8 +118,7 @@ static void send_margins(Tile* tile, int src_index, const GridDimensions* gd) {
         /*        nb.x, nb.y); */
         send_to_neighbour(tile->margin_buffers_send[i],	
                           gd->subregion_sizes[i],			
-                          nb.x,
-                          nb.y,
+                          nb,
                           my_index,			
                           gd,
                           &tile->send_requests[i]);
@@ -184,14 +135,13 @@ static void wait_for_send_completion(Tile* tile) {
 static void recv_margins(Tile* tile, int src_index, const GridDimensions* gd) {
     uint8_t* dst = tile->cells[src_index];
     
-    int my_index = index_of_tile(tile->x, tile->y, gd);
+    int my_index = index_of_tile(tile->pos, gd);
 
     for (NeighbourIndex i = 0; i < NEIGHBOUR_INDEX_COUNT; i++) {
-        Vec2i nb = neighbour_tile((Vec2i){tile->x, tile->y}, i, gd);
+        Vec2i nb = neighbour_tile(tile->pos, i, gd);
         recv_from_neighbour(tile->margin_buffers_recv[i],
                             gd->subregion_sizes[i],
-                            nb.x,
-                            nb.y,
+                            nb,
                             my_index,			
                             gd);
         unpack_sub_grid(dst,
@@ -250,8 +200,8 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
                         gd->wide_size,
                         grid_center,
                         recv_buffer);
-        
-        tile_of_index(status.MPI_TAG, &tiles[i].x, &tiles[i].y, gd);
+
+        tiles[i].pos = tile_of_index(status.MPI_TAG, gd);
     }
 
     free(recv_buffer);
@@ -317,7 +267,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
                       gd->wide_size,
                       grid_center,
                       send_buffer);
-        int tag = index_of_tile(tiles[ti].x, tiles[ti].y, gd);
+        int tag = index_of_tile(tiles[ti].pos, gd);
         MPI_Send(send_buffer, gd->tile_size * gd->tile_size, MPI_BYTE, 0, tag, MPI_COMM_WORLD);
     }
 

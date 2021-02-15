@@ -174,7 +174,7 @@ void parse_rle_file(const char* filepath, uint8_t* tiles, const GridDimensions* 
 		int tx = x / gd->tile_size;
 		int ty = cy / gd->tile_size;
 
-		int ti = index_of_tile(tx, ty, gd);
+		int ti = index_of_tile((Vec2i){tx, ty}, gd);
 		int dx = x % gd->tile_size;
 		int dy = cy % gd->tile_size;
 

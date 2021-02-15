@@ -1,14 +1,23 @@
 #pragma once
 
 #include "grid_dimensions.h"
+#include "geometry.h"
 
-static inline int index_of_tile(int tx, int ty, const GridDimensions* gd) {
-    return ty * gd->tile_hcount + tx;
+typedef enum {
+    TOPLEFT, TOP, TOPRIGHT,
+    LEFT, RIGHT,
+    BOTLEFT, BOT, BOTRIGHT,
+    NEIGHBOUR_INDEX_COUNT,
+} NeighbourIndex;
+
+static inline int index_of_tile(Vec2i pos, const GridDimensions* gd) {
+    return pos.y * gd->tile_hcount + pos.x;
 }
 
-static inline void tile_of_index(int idx, int* tx, int* ty, const GridDimensions* gd) {
-    *tx = idx % gd->tile_hcount;
-    *ty = idx / gd->tile_hcount;
+static inline Vec2i tile_of_index(int idx, const GridDimensions* gd) {
+    return (Vec2i) {
+        idx % gd->tile_hcount, idx / gd->tile_hcount
+    };
 }
 
 static inline int rank_of_index(int idx, const GridDimensions* gd) {
@@ -23,8 +32,49 @@ static inline int tile_count_of_rank(int rank, const GridDimensions* gd) {
     return total_count / worker_count + bonus;
 }
 
-static inline int rank_of_tile(int tx, int ty, const GridDimensions* gd) {
-    int idx = index_of_tile(tx, ty, gd);
+static inline int rank_of_tile(Vec2i pos, const GridDimensions* gd) {
+    int idx = index_of_tile(pos, gd);
     return rank_of_index(idx, gd);
 }
 
+static inline Vec2i neighbour_tile(Vec2i tile, NeighbourIndex idx, const GridDimensions* gd) {
+    Vec2i co = tile;
+    
+    switch (idx) {
+    case TOPLEFT:
+        co.y--;
+        co.x--;
+        break;
+    case TOP:
+        co.y--;
+        break;
+    case TOPRIGHT:
+        co.y--;
+        co.x++;
+        break;
+    case LEFT:
+        co.x--;
+        break;
+    case RIGHT:
+        co.x++;
+        break;
+    case BOTLEFT:
+        co.y++;
+        co.x--;
+        break;
+    case BOT:
+        co.y++;
+        break;
+    case BOTRIGHT:
+        co.y++;
+        co.x++;
+        break;
+    default:
+        return tile;
+    }
+
+    co.x = (co.x + gd->tile_hcount) % gd->tile_hcount;
+    co.y = (co.y + gd->tile_vcount) % gd->tile_vcount;
+
+    return co;
+}
