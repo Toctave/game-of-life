@@ -97,6 +97,13 @@ bool parse_options(Options* options, int argc, char** argv) {
 	    options->seed = atoi(opt);
 	    i++;
 	}
+	else if (!strcmp(arg, "--margin-width")) {
+	    if (!opt) {
+		return false;
+	    }
+	    options->margin_width = atoi(opt);
+	    i++;
+	}
 	else {
 	    return false;
 	}
