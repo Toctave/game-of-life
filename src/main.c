@@ -4,22 +4,16 @@
 
 #include "io.h"
 #include "tile_indexing.h"
+#include "geometry.h"
 
 typedef struct {
     int x;
     int y;
     uint8_t* cells[2];
+    uint8_t* margin_buffers_send[8];
+    uint8_t* margin_buffers_recv[8];
+    MPI_Request send_requests[8];
 } Tile;
-
-typedef struct {
-    int x;
-    int y;
-} Vec2i;
-
-typedef struct {
-    Vec2i min;
-    Vec2i max;
-} Rect;
 
 static uint8_t rule(uint8_t alive, uint8_t neighbours) {
     return (neighbours == 3) || (alive && (neighbours == 2));
@@ -32,10 +26,16 @@ typedef enum {
     NEIGHBOUR_INDEX_COUNT,
 } NeighbourIndex;
 
-static void send_to_neighbour(uint8_t* buffer, size_t size, int dstx, int dsty, int my_index, const GridDimensions* gd) {
+static void send_to_neighbour(uint8_t* buffer,
+                              size_t size,
+                              int dstx,
+                              int dsty,
+                              int my_index,
+                              const GridDimensions* gd,
+                              MPI_Request* req) {
     int neighbour = rank_of_tile(dstx, dsty, gd);
     int tag = (my_index << 16) | index_of_tile(dstx, dsty, gd);
-    MPI_Send(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD);
+    MPI_Isend(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, req);
 }
 
 static void recv_from_neighbour(uint8_t* buffer, size_t size, int srcx, int srcy, int my_index, const GridDimensions* gd) {
@@ -144,39 +144,10 @@ static Vec2i neighbour_tile(Vec2i tile, NeighbourIndex idx, const GridDimensions
     return co;
 }
 
-static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd) {
-    /* --- SEND MARGIN --- */
-    int corner_area = gd->margin_width * gd->margin_width;
-    int border_area = gd->tile_size * gd->margin_width;
-
-    int margin_buffer_size = (corner_area > border_area) ? corner_area : border_area;
+static void send_margins(Tile* tile, int src_index, const GridDimensions* gd) {
+    uint8_t* dst = tile->cells[src_index];
     
-    uint8_t* margin_buffer = malloc(sizeof(uint8_t) * margin_buffer_size);
-    int my_index = index_of_tile(tx, ty, gd);
-
-    int mw = gd->margin_width;
-    int ts = gd->tile_size;
-    Rect subregions[NEIGHBOUR_INDEX_COUNT] = {
-        [TOPLEFT] = { mw, mw, 2 * mw, 2 * mw },
-        [TOP] = { mw, mw, mw + ts, 2 * mw },
-        [TOPRIGHT] = { ts, mw, ts + mw, 2 * mw },
-        [LEFT] = { mw, mw, 2 * mw, mw + ts},
-        [RIGHT] = { ts, mw, ts + mw, ts + mw},
-        [BOTLEFT] = { mw, ts, 2 * mw, ts + mw},
-        [BOT] = { mw, ts, ts + mw, ts + mw },
-        [BOTRIGHT] = { ts, ts, ts + mw, ts + mw },
-    };
-
-    int subregion_sizes[NEIGHBOUR_INDEX_COUNT] = {
-        [TOPLEFT] = corner_area,
-        [TOP] = border_area,
-        [TOPRIGHT] = corner_area,
-        [LEFT] = border_area,
-        [RIGHT] = border_area,
-        [BOTLEFT] = corner_area,
-        [BOT] = border_area,
-        [BOTRIGHT] = corner_area,
-    };
+    int my_index = index_of_tile(tile->x, tile->y, gd);
 
     const char* neighbour_labels[] = { "TOPLEFT", "TOP", "TOPRIGHT",
                                        "LEFT", "RIGHT",
@@ -184,63 +155,50 @@ static void send_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd)
     };
     
     for (NeighbourIndex i = 0; i < NEIGHBOUR_INDEX_COUNT; i++) {
-        Vec2i nb = neighbour_tile((Vec2i){tx, ty}, i, gd);        
-        pack_sub_grid(dst, gd->wide_size, subregions[i], margin_buffer);
-        send_to_neighbour(margin_buffer,	
-                          subregion_sizes[i],			
+        Vec2i nb = neighbour_tile((Vec2i){tile->x, tile->y}, i, gd);        
+        pack_sub_grid(dst,
+                      gd->wide_size,
+                      gd->subregions_send[i],
+                      tile->margin_buffers_send[i]);
+        /* printf("About to send %d bytes to %s (%d, %d)\n", */
+        /*        gd->subregion_sizes[i], */
+        /*        neighbour_labels[i], */
+        /*        nb.x, nb.y); */
+        send_to_neighbour(tile->margin_buffers_send[i],	
+                          gd->subregion_sizes[i],			
                           nb.x,
                           nb.y,
                           my_index,			
-                          gd);
+                          gd,
+                          &tile->send_requests[i]);
+        /* printf("Sent to %s\n", neighbour_labels[i]); */
     }
-    free(margin_buffer);
 }
 
-static void recv_margins(int tx, int ty, uint8_t* dst, const GridDimensions* gd) {
-    /* --- SEND MARGIN --- */
-    int corner_area = gd->margin_width * gd->margin_width;
-    int border_area = gd->tile_size * gd->margin_width;
+static void wait_for_send_completion(Tile* tile) {
+    for (int i = 0; i < 8; i++) {
+        MPI_Wait(&tile->send_requests[i], NULL);
+    }
+}
 
-    int margin_buffer_size = (corner_area > border_area) ? corner_area : border_area;
+static void recv_margins(Tile* tile, int src_index, const GridDimensions* gd) {
+    uint8_t* dst = tile->cells[src_index];
     
-    uint8_t* margin_buffer = malloc(sizeof(uint8_t) * margin_buffer_size);
-    int my_index = index_of_tile(tx, ty, gd);
-
-    int mw = gd->margin_width;
-    int ts = gd->tile_size;
-    Rect subregions[NEIGHBOUR_INDEX_COUNT] = {
-        [TOPLEFT] = { 0, 0, mw, mw },
-        [TOP] = { mw, 0, mw + ts, mw },
-        [TOPRIGHT] = { ts + mw, 0, ts + 2 * mw, mw },
-        [LEFT] = { 0, mw, mw, mw + ts},
-        [RIGHT] = { ts + mw, mw, ts + 2 * mw, ts + mw},
-        [BOTLEFT] = { 0, ts + mw, mw, ts + 2 * mw},
-        [BOT] = { mw, ts + mw, ts + mw, ts + 2 * mw },
-        [BOTRIGHT] = { ts + mw, ts + mw, ts + 2 * mw, ts + 2 * mw },
-    };
-
-    int subregion_sizes[NEIGHBOUR_INDEX_COUNT] = {
-        [TOPLEFT] = corner_area,
-        [TOP] = border_area,
-        [TOPRIGHT] = corner_area,
-        [LEFT] = border_area,
-        [RIGHT] = border_area,
-        [BOTLEFT] = corner_area,
-        [BOT] = border_area,
-        [BOTRIGHT] = corner_area,
-    };
+    int my_index = index_of_tile(tile->x, tile->y, gd);
 
     for (NeighbourIndex i = 0; i < NEIGHBOUR_INDEX_COUNT; i++) {
-        Vec2i nb = neighbour_tile((Vec2i){tx, ty}, i, gd);
-        recv_from_neighbour(margin_buffer,	
-                            subregion_sizes[i],
+        Vec2i nb = neighbour_tile((Vec2i){tile->x, tile->y}, i, gd);
+        recv_from_neighbour(tile->margin_buffers_recv[i],
+                            gd->subregion_sizes[i],
                             nb.x,
                             nb.y,
                             my_index,			
                             gd);
-        unpack_sub_grid(dst, gd->wide_size, subregions[i], margin_buffer);
+        unpack_sub_grid(dst,
+                        gd->wide_size,
+                        gd->subregions_recv[i],
+                        tile->margin_buffers_recv[i]);
     }
-    free(margin_buffer);
 }
 
 static void worker(int rank, int iter, const GridDimensions* gd) {
@@ -259,11 +217,27 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     MPI_Barrier(MPI_COMM_WORLD);
 
     Tile* tiles = malloc(sizeof(Tile) * tile_count);
-    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * gd->wide_size * gd->wide_size * 2 * tile_count);
+
+    size_t cell_count = gd->wide_size * gd->wide_size;
+    size_t total_margin_area = 4 * gd->wide_size * (gd->wide_size + gd->tile_size);
+    
+    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * (cell_count + total_margin_area) * 2 * tile_count);
     
     for (int i = 0; i < tile_count; i++) {
-        tiles[i].cells[0] = &cell_buffer[gd->wide_size * gd->wide_size * 2 * i];
-        tiles[i].cells[1] = &cell_buffer[gd->wide_size * gd->wide_size * (2 * i + 1)];
+        size_t tile_offset = (cell_count + total_margin_area) * 2 * i; 
+        tiles[i].cells[0] = &cell_buffer[tile_offset];
+        tiles[i].cells[1] = &cell_buffer[tile_offset + cell_count];
+
+        size_t margin_offset = 2 * cell_count;
+        for (int j = 0; j < 8; j++) {
+            tiles[i].margin_buffers_send[j] =
+                &cell_buffer[tile_offset + margin_offset];
+            margin_offset += gd->subregion_sizes[i];
+
+            tiles[i].margin_buffers_recv[j] =
+                &cell_buffer[tile_offset + margin_offset];
+            margin_offset += gd->subregion_sizes[i]; 
+        }
     }
 
     uint8_t* recv_buffer = malloc(sizeof(uint8_t) * gd->tile_size * gd->tile_size);
@@ -292,18 +266,16 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
         double t0 = MPI_Wtime();
 	
         for (int ti = 0; ti < tile_count; ti++) {
-            send_margins(tiles[ti].x,
-                         tiles[ti].y,
-                         tiles[ti].cells[src_index],
+            send_margins(&tiles[ti],
+                         src_index,
                          gd);
         }
             
         double t1 = MPI_Wtime();
 	
         for (int ti = 0; ti < tile_count; ti++) {
-            recv_margins(tiles[ti].x,
-                         tiles[ti].y,
-                         tiles[ti].cells[src_index],
+            recv_margins(&tiles[ti],
+                         src_index,
                          gd);
         }
 
@@ -325,6 +297,10 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
             }
         }
 	
+        for (int ti = 0; ti < tile_count; ti++) {
+            wait_for_send_completion(&tiles[ti]);
+        }
+
         double t3 = MPI_Wtime();
 
         tsend += t1 - t0;
@@ -349,6 +325,8 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
 
     free(send_buffer);
     free(cell_buffer);
+
+    
     free(tiles);
 
     printf("[Worker %d] total time %gs, init %gs, loop : (send %gs, receive %gs, update %gs), finalize %gs\n",
@@ -388,6 +366,11 @@ int main(int argc, char** argv) {
     assert(options.width % options.tile_size == 0);
     assert(options.height % options.tile_size == 0);
 
+    int mw = options.margin_width;
+    int ts = options.tile_size;
+    int corner_area = mw * mw;
+    int border_area = ts * mw;
+    
     GridDimensions gd = {
         .width = options.width,
         .height = options.height,
@@ -398,6 +381,36 @@ int main(int argc, char** argv) {
         .margin_width = options.margin_width,
 
         .node_count = node_count,
+        .subregions_send = {
+            [TOPLEFT] = { mw, mw, 2 * mw, 2 * mw },
+            [TOP] = { mw, mw, mw + ts, 2 * mw },
+            [TOPRIGHT] = { ts, mw, ts + mw, 2 * mw },
+            [LEFT] = { mw, mw, 2 * mw, mw + ts},
+            [RIGHT] = { ts, mw, ts + mw, ts + mw},
+            [BOTLEFT] = { mw, ts, 2 * mw, ts + mw},
+            [BOT] = { mw, ts, ts + mw, ts + mw },
+            [BOTRIGHT] = { ts, ts, ts + mw, ts + mw },
+        },
+        .subregions_recv = {
+            [TOPLEFT] = { 0, 0, mw, mw },
+            [TOP] = { mw, 0, mw + ts, mw },
+            [TOPRIGHT] = { ts + mw, 0, ts + 2 * mw, mw },
+            [LEFT] = { 0, mw, mw, mw + ts},
+            [RIGHT] = { ts + mw, mw, ts + 2 * mw, ts + mw},
+            [BOTLEFT] = { 0, ts + mw, mw, ts + 2 * mw},
+            [BOT] = { mw, ts + mw, ts + mw, ts + 2 * mw },
+            [BOTRIGHT] = { ts + mw, ts + mw, ts + 2 * mw, ts + 2 * mw },
+        },
+        .subregion_sizes = {
+            [TOPLEFT] = corner_area,
+            [TOP] = border_area,
+            [TOPRIGHT] = corner_area,
+            [LEFT] = border_area,
+            [RIGHT] = border_area,
+            [BOTLEFT] = corner_area,
+            [BOT] = border_area,
+            [BOTRIGHT] = corner_area,
+        }
     };
 	
     if (rank == 0) {
@@ -427,7 +440,6 @@ int main(int argc, char** argv) {
                      MPI_COMM_WORLD);
         }
 	
-        /* printf("\n--- DONE SENDING EVERYTHING ---\n"); */
 
         uint8_t *tmp_tile = malloc(sizeof(uint8_t) * options.tile_size*options.tile_size);
         for (int i = 0; i < gd.tile_vcount*gd.tile_hcount; i++) {
