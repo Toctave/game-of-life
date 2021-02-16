@@ -85,6 +85,7 @@ static void unpack_sub_grid(uint8_t* cells, int wide_size, Rect rect, const uint
 }
 
 static void send_margins(Tile* tile, int src_index, const GridDimensions* gd) {
+    assert(src_index == 0 || src_index == 1);
     uint8_t* cells = tile->cells[src_index];
     
     int my_index = index_of_tile(tile->pos, gd);
@@ -147,9 +148,10 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     Tile* tiles = malloc(sizeof(Tile) * tile_count);
 
     size_t cell_count = gd->wide_size * gd->wide_size;
-    size_t total_margin_area = 4 * gd->wide_size * (gd->wide_size + gd->tile_size);
-    
-    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * (cell_count + total_margin_area) * 2 * tile_count);
+    size_t total_margin_area = 4 * gd->margin_width * (gd->margin_width + gd->tile_size);
+
+    size_t cell_buffer_size = (cell_count + total_margin_area) * 2 * tile_count;
+    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * cell_buffer_size);
     
     for (int i = 0; i < tile_count; i++) {
         size_t tile_offset = (cell_count + total_margin_area) * 2 * i; 
@@ -160,12 +162,14 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
         for (int j = 0; j < 8; j++) {
             tiles[i].margin_buffers_send[j] =
                 &cell_buffer[tile_offset + margin_offset];
-            margin_offset += gd->subregion_sizes[i];
+            margin_offset += gd->subregion_sizes[j];
 
             tiles[i].margin_buffers_recv[j] =
                 &cell_buffer[tile_offset + margin_offset];
-            margin_offset += gd->subregion_sizes[i]; 
+            margin_offset += gd->subregion_sizes[j]; 
         }
+        assert(margin_offset == 2 * cell_count + total_margin_area * 2);
+        assert(tile_offset + margin_offset <= cell_buffer_size);
     }
 
     uint8_t* recv_buffer = malloc(sizeof(uint8_t) * gd->tile_size * gd->tile_size);
@@ -192,7 +196,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     int current_step = 0;
     while (current_step < iter) {
         double t0 = MPI_Wtime();
-	
+        
         for (int ti = 0; ti < tile_count; ti++) {
             send_margins(&tiles[ti],
                          src_index,
