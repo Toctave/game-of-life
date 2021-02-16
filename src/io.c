@@ -108,6 +108,23 @@ bool parse_options(Options* options, int argc, char** argv) {
 	    return false;
 	}
     }
+
+    char log_file_start[256];
+
+    if (options->input_filepath) {
+        sprintf(log_file_start, "f_%s", options->input_filepath);
+    } else {
+        sprintf(log_file_start, "rnd_%.3f", options->density);
+    }
+    
+    sprintf(options->log_filepath,
+            "logs/%s_w%d_h%d_ts%d_mw%d.txt",
+            log_file_start,
+            options->width,
+            options->height,
+            options->tile_size,
+            options->margin_width);
+    
     return true;
 }
 

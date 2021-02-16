@@ -14,6 +14,16 @@ typedef struct {
     MPI_Request send_requests[8];
 } Tile;
 
+MPI_File g_log_file;
+MPI_Comm g_worker_comm;
+
+#define WORKER_LOG(...) do {                                            \
+        char buffer[512];                                               \
+        sprintf(buffer, __VA_ARGS__);                                   \
+        MPI_File_write_ordered(g_log_file, buffer, strlen(buffer), MPI_BYTE, NULL); \
+    } while (0)
+    
+
 static uint8_t rule(uint8_t alive, uint8_t neighbours) {
     return (neighbours == 3) || (alive && (neighbours == 2));
 }
@@ -259,7 +269,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     free(cell_buffer);
     free(tiles);
 
-    printf("[Worker %d] total time %gs, init %gs, loop : (send %gs, receive %gs, update %gs), finalize %gs\n",
+    WORKER_LOG("%d, %g, %g, %g, %g, %g, %g\n",
            rank,
            tfinish_send - tstart,
            tinit - tstart,
@@ -282,6 +292,11 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &node_count);
 
+    MPI_Comm_split(MPI_COMM_WORLD,
+                   rank == 0 ? 0 : 1,
+                   0,
+                   &g_worker_comm);
+    
     /* Initialize the cells */
     Options options;
     if (!parse_options(&options, argc, argv)) {
@@ -388,9 +403,16 @@ int main(int argc, char** argv) {
         free(tmp_tile);
         free(tiles);
     } else{
+        MPI_File_open(g_worker_comm,
+                      options.log_filepath,
+                      MPI_MODE_CREATE | MPI_MODE_WRONLY | MPI_MODE_SEQUENTIAL,
+                      MPI_INFO_NULL,
+                      &g_log_file);
+
         worker(rank, options.iter, &gd);
     }
 
-    MPI_Finalize();    
+    MPI_File_close(&g_log_file);
 
+    MPI_Finalize();
 }

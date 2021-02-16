@@ -14,8 +14,9 @@ typedef struct {
     bool gui_on;
     int iter;
     int seed;
-    char* input_filepath;
-    char* output_filepath;
+    const char* input_filepath;
+    const char* output_filepath;
+    char log_filepath[256];
     
     int tile_size;
     int margin_width;
