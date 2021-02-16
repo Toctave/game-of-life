@@ -124,6 +124,11 @@ bool parse_options(Options* options, int argc, char** argv) {
             options->height,
             options->tile_size,
             options->margin_width);
+
+    for (char* s = options->log_filepath + strlen("logs/"); *s; s++) {
+        if (*s == '/')
+            *s = '.';
+    }
     
     return true;
 }
