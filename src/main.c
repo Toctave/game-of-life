@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <mpi.h>
+#include <omp.h>
 
 #include "io.h"
 #include "tile_indexing.h"
