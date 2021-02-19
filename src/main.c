@@ -229,7 +229,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
              growing_margin++) {
 	    #pragma omp parallel
 	    {
-            #pragma omp for
+            #pragma omp for schedule(dynamic)
             for (int ti = 0; ti < tile_count; ti++) {
                 update_tile_inside(tiles[ti].cells[src_index],
                                    tiles[ti].cells[!src_index],
