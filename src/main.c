@@ -227,12 +227,16 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
         for (int growing_margin = 1;
              growing_margin <= gd->margin_width;
              growing_margin++) {
+	    #pragma omp parallel
+	    {
+            #pragma omp for
             for (int ti = 0; ti < tile_count; ti++) {
                 update_tile_inside(tiles[ti].cells[src_index],
                                    tiles[ti].cells[!src_index],
                                    gd->wide_size,
                                    growing_margin);
             }
+	    }
             src_index = !src_index;
             current_step++;
             if (current_step >= iter) {
