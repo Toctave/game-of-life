@@ -7,12 +7,13 @@
 
 #include <mpi.h>
 #include <omp.h>
+#include <cuda_runtime.h>
 
 typedef struct {
     Vec2i pos;
-    uint8_t* cells[2];
-    uint8_t* margin_buffers_send[8];
-    uint8_t* margin_buffers_recv[8];
+    uint8_t* cells[2];               // device-side buffers
+    uint8_t* margin_buffers_send[8]; // host-side buffers
+    uint8_t* margin_buffers_recv[8]; // host-side buffers
     MPI_Request send_requests[8];
 } Tile;
 
@@ -24,7 +25,36 @@ MPI_Comm g_worker_comm;
         sprintf(buffer, __VA_ARGS__);                                   \
         MPI_File_write_ordered(g_log_file, buffer, strlen(buffer), MPI_BYTE, NULL); \
     } while (0)
+
+void* safe_cuda_malloc(size_t size) {
+    void* ptr;
+    cudaError_t err = cudaMalloc(&ptr, size);
     
+    if (err != cudaSuccess) {
+	fprintf(stderr, "Fatal error in cuda malloc, exiting.\n");
+	exit(1);
+    }
+
+    return ptr;
+}
+
+void safe_cuda_free(void* ptr) {
+    cudaError_t err = cudaFree(ptr);
+    
+    if (err != cudaSuccess) {
+	fprintf(stderr, "Fatal error in cuda free, exiting.\n");
+	exit(1);
+    }
+}
+
+void safe_cuda_memcpy(void* dst, const void* src, size_t size, enum cudaMemcpyKind kind) {
+    cudaError_t err = cudaMemcpy(dst, src, size, kind);
+
+    if (err != cudaSuccess) {
+	fprintf(stderr, "Fatal error in cuda memcpy, exiting.\n");
+	exit(1);
+    }
+}
 
 static uint8_t rule(uint8_t alive, uint8_t neighbours) {
     return (neighbours == 3) || (alive && (neighbours == 2));
@@ -76,23 +106,37 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int ma
     }
 }
 
+/* 
+ * - cells : device pointer
+ * - buffer : host pointer
+ */
 static void pack_sub_grid(const uint8_t* cells, int wide_size, Rect rect, uint8_t* buffer) {
     int row_length = (rect.max.x - rect.min.x);
     for (int y = rect.min.y; y < rect.max.y; y++) {
         int cells_offset = y * wide_size + rect.min.x;
         int buffer_offset = (y - rect.min.y) * row_length;
         
-        memcpy(buffer + buffer_offset, cells + cells_offset, row_length);
+        safe_cuda_memcpy(buffer + buffer_offset,
+			 cells + cells_offset,
+			 row_length,
+			 cudaMemcpyDeviceToHost);
     }
 }
 
+/* 
+ * - cells : device pointer
+ * - buffer : host pointer
+ */
 static void unpack_sub_grid(uint8_t* cells, int wide_size, Rect rect, const uint8_t* buffer) {
     int row_length = (rect.max.x - rect.min.x);
     for (int y = rect.min.y; y < rect.max.y; y++) {
         int cells_offset = y * wide_size + rect.min.x;
         int buffer_offset = (y - rect.min.y) * row_length;
         
-        memcpy(cells + cells_offset, buffer + buffer_offset, row_length);
+        safe_cuda_memcpy(cells + cells_offset,
+			 buffer + buffer_offset,
+			 row_length,
+			 cudaMemcpyHostToDevice);
     }
 }
 
@@ -142,6 +186,11 @@ static void recv_margins(Tile* tile, int src_index, const GridDimensions* gd) {
     }
 }
 
+void update_tile_kernel_call(uint8_t* src,
+			     uint8_t* dst,
+			     int wide_size,
+			     int margin_width);
+
 static void worker(int rank, int iter, const GridDimensions* gd) {
     double tstart = MPI_Wtime();
     
@@ -162,26 +211,32 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     size_t cell_count = gd->wide_size * gd->wide_size;
     size_t total_margin_area = 4 * gd->margin_width * (gd->margin_width + gd->tile_size);
 
-    size_t cell_buffer_size = (cell_count + total_margin_area) * 2 * tile_count;
-    uint8_t* cell_buffer = malloc(sizeof(uint8_t) * cell_buffer_size);
+    size_t cell_buffer_size = cell_count * 2 * tile_count;
+    uint8_t* cell_buffer = safe_cuda_malloc(sizeof(uint8_t) * cell_buffer_size);
     
     for (int i = 0; i < tile_count; i++) {
-        size_t tile_offset = (cell_count + total_margin_area) * 2 * i; 
+        size_t tile_offset = cell_count * 2 * i; 
         tiles[i].cells[0] = &cell_buffer[tile_offset];
         tiles[i].cells[1] = &cell_buffer[tile_offset + cell_count];
+    }
 
-        size_t margin_offset = 2 * cell_count;
+    size_t margin_buffer_size = total_margin_area * 2 * tile_count;
+    uint8_t* margin_buffer = malloc(sizeof(uint8_t) * margin_buffer_size);
+    
+    for (int i = 0; i < tile_count; i++) {
+	size_t tile_offset = total_margin_area * 2 * i;
+        size_t margin_offset = 0;
+	
         for (int j = 0; j < 8; j++) {
             tiles[i].margin_buffers_send[j] =
-                &cell_buffer[tile_offset + margin_offset];
+                &margin_buffer[tile_offset + margin_offset];
             margin_offset += gd->subregion_sizes[j];
 
             tiles[i].margin_buffers_recv[j] =
-                &cell_buffer[tile_offset + margin_offset];
+                &margin_buffer[tile_offset + margin_offset];
             margin_offset += gd->subregion_sizes[j]; 
         }
-        assert(margin_offset == 2 * cell_count + total_margin_area * 2);
-        assert(tile_offset + margin_offset <= cell_buffer_size);
+	assert(margin_offset == total_margin_area * 2);
     }
 
     uint8_t* recv_buffer = malloc(sizeof(uint8_t) * gd->tile_size * gd->tile_size);
@@ -228,16 +283,15 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
         for (int growing_margin = 1;
              growing_margin <= gd->margin_width;
              growing_margin++) {
-	    #pragma omp parallel
+             #pragma omp parallel
 	    {
-            #pragma omp for schedule(dynamic)
-		
-            for (int ti = 0; ti < tile_count; ti++) {
-                update_tile_inside(tiles[ti].cells[src_index],
-                                   tiles[ti].cells[!src_index],
-                                   gd->wide_size,
-                                   growing_margin);
-            }
+                #pragma omp for schedule(dynamic)
+		for (int ti = 0; ti < tile_count; ti++) {
+		    update_tile_kernel_call(tiles[ti].cells[src_index],
+					    tiles[ti].cells[!src_index],
+					    gd->wide_size,
+					    growing_margin);
+		}
 	    }
             src_index = !src_index;
             current_step++;
@@ -276,7 +330,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     double tfinish_send = MPI_Wtime();
 
     free(send_buffer);
-    free(cell_buffer);
+    safe_cuda_free(cell_buffer);
     free(tiles);
 
     WORKER_LOG("%d, %g, %g, %g, %g, %g, %g, %g\n",
@@ -402,7 +456,9 @@ int main(int argc, char** argv) {
             MPI_Status status;
             MPI_Recv(tmp_tile, options.tile_size*options.tile_size, MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
-            memcpy(&tiles[options.tile_size * options.tile_size * status.MPI_TAG], tmp_tile, options.tile_size * options.tile_size * sizeof(uint8_t));
+            memcpy(&tiles[options.tile_size * options.tile_size * status.MPI_TAG],
+		   tmp_tile,
+		   options.tile_size * options.tile_size * sizeof(uint8_t));
         }
 
         if (options.output_filepath) {

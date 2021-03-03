@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <stdio.h>
 
 __device__
 uint8_t rule(uint8_t alive, uint8_t neighbours) {
@@ -19,6 +20,7 @@ void update_tile_inside_gpu(uint8_t* src, uint8_t* dst, int wide_size, int margi
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
+    /* printf("i = %d, j = %d\n", i, j); */
     if (i >= start && i < end
 	&& j >= start && j < end) {
 
@@ -29,4 +31,15 @@ void update_tile_inside_gpu(uint8_t* src, uint8_t* dst, int wide_size, int margi
 	}
 	dst[base] = rule(src[base], neighbours);
     }
+}
+
+extern "C" 
+__host__
+void update_tile_kernel_call(uint8_t* src,
+			     uint8_t* dst,
+			     int wide_size,
+			     int margin_width) {
+    dim3 numBlocks(wide_size / 32 + 1, wide_size / 32 + 1);
+    dim3 threadsPerBlocks(32, 32);
+    update_tile_inside_gpu<<< numBlocks, threadsPerBlocks >>>(src, dst, wide_size, margin_width);
 }
