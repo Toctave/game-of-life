@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <time.h>
 
+#include <mpi.h>
+#include <omp.h>
+
 bool parse_options(Options* options, int argc, char** argv) {
     int i = 1;
 
@@ -21,6 +24,9 @@ bool parse_options(Options* options, int argc, char** argv) {
     options->output_filepath = NULL;
     options->tile_size = 16;
     options->margin_width = 1;
+
+    MPI_Comm_size(MPI_COMM_WORLD, &options->node_count);
+    options->thread_count = omp_get_num_threads();
 
     while (i < argc) {
 	char* arg = argv[i];
@@ -116,10 +122,12 @@ bool parse_options(Options* options, int argc, char** argv) {
     } else {
         sprintf(log_file_start, "rnd_%.3f", options->density);
     }
-    
+
     sprintf(options->log_filepath,
-            "logs/%s_w%d_h%d_ts%d_mw%d.txt",
+            "logs/%s_nodes%d_threads%d_w%d_h%d_ts%d_mw%d.txt",
             log_file_start,
+	    options->node_count,
+	    options->thread_count,
             options->width,
             options->height,
             options->tile_size,

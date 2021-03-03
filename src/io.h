@@ -8,6 +8,9 @@
 #include "grid_dimensions.h"
 
 typedef struct {
+    int node_count;
+    int thread_count;
+    
     int width;
     int height;
     float density;

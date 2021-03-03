@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <assert.h>
-#include <mpi.h>
-#include <omp.h>
 
 #include "io.h"
 #include "tile_indexing.h"
 #include "geometry.h"
+
+#include <mpi.h>
+#include <omp.h>
 
 typedef struct {
     Vec2i pos;
@@ -72,7 +73,7 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int ma
             }
             dst[base] = rule(src[base], neighbours);
         }
-    }  
+    }
 }
 
 static void pack_sub_grid(const uint8_t* cells, int wide_size, Rect rect, uint8_t* buffer) {
@@ -202,7 +203,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     double tinit = MPI_Wtime();
     int src_index = 0;
 
-    double tsend = 0.0, trecv = 0.0, tupdate = 0.0;
+    double tsend = 0.0, trecv = 0.0, tupdate = 0.0, twaitsend=0.0;
 
     int current_step = 0;
     while (current_step < iter) {
@@ -230,6 +231,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
 	    #pragma omp parallel
 	    {
             #pragma omp for schedule(dynamic)
+		
             for (int ti = 0; ti < tile_count; ti++) {
                 update_tile_inside(tiles[ti].cells[src_index],
                                    tiles[ti].cells[!src_index],
@@ -244,15 +246,18 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
             }
         }
 	
+        double t3 = MPI_Wtime();
+	
         for (int ti = 0; ti < tile_count; ti++) {
             wait_for_send_completion(&tiles[ti]);
         }
 
-        double t3 = MPI_Wtime();
+        double t4 = MPI_Wtime();
 
         tsend += t1 - t0;
         trecv += t2 - t1;
         tupdate += t3 - t2;
+        twaitsend += t4 - t3;
     }
 
     double tfinish_iter = MPI_Wtime();
@@ -274,14 +279,15 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     free(cell_buffer);
     free(tiles);
 
-    WORKER_LOG("%d, %g, %g, %g, %g, %g, %g\n",
-           rank,
-           tfinish_send - tstart,
-           tinit - tstart,
-           tsend,
-           trecv,
-           tupdate,
-           tfinish_send - tfinish_iter);
+    WORKER_LOG("%d, %g, %g, %g, %g, %g, %g, %g\n",
+	       rank,
+	       tfinish_send - tstart,
+	       tinit - tstart,
+	       tsend,
+	       trecv,
+	       tupdate,
+	       twaitsend,
+	       tfinish_send - tfinish_iter);
 }
 
 void init_tiles_randomly(uint8_t *tiles, int total_cell_count, float density){
