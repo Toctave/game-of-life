@@ -20,6 +20,14 @@ typedef struct {
 MPI_File g_log_file;
 MPI_Comm g_worker_comm;
 
+#define SAFE_CUDA(call) do {						\
+	cudaError_t val = (call);					\
+	if (val != cudaSuccess) {					\
+	    fprintf(stderr, "Fatal error in call to" #call "\n");	\
+	    exit(1);							\
+	}								\
+    } while (0)
+
 #define WORKER_LOG(...) do {                                            \
         char buffer[512];                                               \
         sprintf(buffer, __VA_ARGS__);                                   \
@@ -370,6 +378,11 @@ int main(int argc, char** argv) {
                 "  game_of_life [-w <width>] [-h <height>] [-d <density>] [-t <tile size>] [-i <iter>] [-g] [-s <seed>] [-o <output_file>] [-f <input_filepath>]\n");
         return 1;
     }
+
+    SAFE_CUDA(cudaGetDeviceCount(&options.gpu_count));
+
+    printf("Device count : %d\n", options.gpu_count);
+    
     srand(options.seed);
 
     /* Init tiles and scatter them to worker nodes */

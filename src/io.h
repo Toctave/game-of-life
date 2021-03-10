@@ -10,6 +10,7 @@
 typedef struct {
     int node_count;
     int thread_count;
+    int gpu_count;
     
     int width;
     int height;
