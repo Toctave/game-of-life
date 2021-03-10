@@ -64,6 +64,17 @@ void safe_cuda_memcpy(void* dst, const void* src, size_t size, enum cudaMemcpyKi
     }
 }
 
+void memcpy_wrapper(void* dst, const void* src, size_t size, enum cudaMemcpyKind kind) {
+    memcpy(dst, src, size);
+}
+
+struct {
+    void* (*malloc)(size_t);
+    void (*free)(void*);
+    void (*memcpy)(void*, const void*, size_t, enum cudaMemcpyKind);
+    void (*update_tile)(uint8_t*, uint8_t*, int, int);
+} g_device_functions;
+
 static uint8_t rule(uint8_t alive, uint8_t neighbours) {
     return (neighbours == 3) || (alive && (neighbours == 2));
 }
@@ -91,26 +102,31 @@ static void recv_from_neighbour(uint8_t* buffer,
     MPI_Recv(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, NULL);
 }
 
-static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int margin_width) {
+static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int margin_iterations) {
     int neighbour_offsets[8] = {
         -wide_size - 1, -wide_size, -wide_size + 1,
         -1,                                      1,
         wide_size - 1,   wide_size,  wide_size + 1
     };
 
-    int start = margin_width;
-    int end = wide_size - margin_width;
 
     /* Update internal tile */
-    for (int j = start; j < end; j++) {
-        for (int i = start; i < end; i++) {
-            int neighbours = 0;
-            int base = j * wide_size + i;
-            for (int k = 0; k < 8; k++) {
-                neighbours += src[base + neighbour_offsets[k]];
-            }
-            dst[base] = rule(src[base], neighbours);
-        }
+    for (int growing_margin = 1;
+	 growing_margin <= margin_iterations;
+	 growing_margin++) {
+	int start = growing_margin;
+	int end = wide_size - growing_margin;
+	
+	for (int j = start; j < end; j++) {
+	    for (int i = start; i < end; i++) {
+		int neighbours = 0;
+		int base = j * wide_size + i;
+		for (int k = 0; k < 8; k++) {
+		    neighbours += src[base + neighbour_offsets[k]];
+		}
+		dst[base] = rule(src[base], neighbours);
+	    }
+	}
     }
 }
 
@@ -124,10 +140,10 @@ static void pack_sub_grid(const uint8_t* cells, int wide_size, Rect rect, uint8_
         int cells_offset = y * wide_size + rect.min.x;
         int buffer_offset = (y - rect.min.y) * row_length;
         
-        safe_cuda_memcpy(buffer + buffer_offset,
-			 cells + cells_offset,
-			 row_length,
-			 cudaMemcpyDeviceToHost);
+        g_device_functions.memcpy(buffer + buffer_offset,
+				  cells + cells_offset,
+				  row_length,
+				  cudaMemcpyDeviceToHost);
     }
 }
 
@@ -141,10 +157,10 @@ static void unpack_sub_grid(uint8_t* cells, int wide_size, Rect rect, const uint
         int cells_offset = y * wide_size + rect.min.x;
         int buffer_offset = (y - rect.min.y) * row_length;
         
-        safe_cuda_memcpy(cells + cells_offset,
-			 buffer + buffer_offset,
-			 row_length,
-			 cudaMemcpyHostToDevice);
+        g_device_functions.memcpy(cells + cells_offset,
+				  buffer + buffer_offset,
+				  row_length,
+				  cudaMemcpyHostToDevice);
     }
 }
 
@@ -220,7 +236,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     size_t total_margin_area = 4 * gd->margin_width * (gd->margin_width + gd->tile_size);
 
     size_t cell_buffer_size = cell_count * 2 * tile_count;
-    uint8_t* cell_buffer = safe_cuda_malloc(sizeof(uint8_t) * cell_buffer_size);
+    uint8_t* cell_buffer = g_device_functions.malloc(sizeof(uint8_t) * cell_buffer_size);
     
     for (int i = 0; i < tile_count; i++) {
         size_t tile_offset = cell_count * 2 * i; 
@@ -287,26 +303,25 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
         }
 
         double t2 = MPI_Wtime();
+
+	int margin_iterations = gd->margin_width;
+	if (current_step + margin_iterations >= iter) {
+	    margin_iterations = iter - current_step;
+	}
 	
-        for (int growing_margin = 1;
-             growing_margin <= gd->margin_width;
-             growing_margin++) {
-             #pragma omp parallel
-	    {
-                #pragma omp for schedule(dynamic)
-		for (int ti = 0; ti < tile_count; ti++) {
-		    update_tile_kernel_call(tiles[ti].cells[src_index],
-					    tiles[ti].cells[!src_index],
-					    gd->wide_size,
-					    growing_margin);
-		}
+#pragma omp parallel
+	{
+#pragma omp for schedule(dynamic)
+	    for (int ti = 0; ti < tile_count; ti++) {
+		g_device_functions.update_tile(tiles[ti].cells[src_index],
+					       tiles[ti].cells[!src_index],
+					       gd->wide_size,
+					       margin_iterations);
 	    }
             src_index = !src_index;
-            current_step++;
-            if (current_step >= iter) {
-                break;
-            }
         }
+
+	current_step += margin_iterations;
 	
         double t3 = MPI_Wtime();
 	
@@ -338,7 +353,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     double tfinish_send = MPI_Wtime();
 
     free(send_buffer);
-    safe_cuda_free(cell_buffer);
+    g_device_functions.free(cell_buffer);
     free(tiles);
 
     WORKER_LOG("%d, %g, %g, %g, %g, %g, %g, %g\n",
@@ -381,7 +396,21 @@ int main(int argc, char** argv) {
 
     SAFE_CUDA(cudaGetDeviceCount(&options.gpu_count));
 
+    /* options.gpu_count = 0; */
+    
     printf("Device count : %d\n", options.gpu_count);
+
+    if (options.gpu_count > 0 && options.use_gpu) {
+	g_device_functions.malloc = safe_cuda_malloc;
+	g_device_functions.free = safe_cuda_free;
+	g_device_functions.memcpy = safe_cuda_memcpy;
+	g_device_functions.update_tile = update_tile_kernel_call;
+    } else {
+	g_device_functions.malloc = malloc;
+	g_device_functions.free = free;
+	g_device_functions.memcpy = memcpy_wrapper;
+	g_device_functions.update_tile = update_tile_inside;
+    }
     
     srand(options.seed);
 
@@ -476,7 +505,7 @@ int main(int argc, char** argv) {
 
         if (options.output_filepath) {
             save_grid_to_png(tiles, options.output_filepath, &gd);
-        } else {
+        } else if (options.width < 128 && options.height < 128) {
             print_grid(tiles, &gd);
         }
 

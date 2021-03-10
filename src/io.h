@@ -11,6 +11,7 @@ typedef struct {
     int node_count;
     int thread_count;
     int gpu_count;
+    bool use_gpu;
     
     int width;
     int height;
