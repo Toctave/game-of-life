@@ -36,32 +36,17 @@ MPI_Comm g_worker_comm;
 
 void* safe_cuda_malloc(size_t size) {
     void* ptr;
-    cudaError_t err = cudaMalloc(&ptr, size);
+    SAFE_CUDA(cudaMalloc(&ptr, size));
     
-    if (err != cudaSuccess) {
-	fprintf(stderr, "Fatal error in cuda malloc, exiting.\n");
-	exit(1);
-    }
-
     return ptr;
 }
 
 void safe_cuda_free(void* ptr) {
-    cudaError_t err = cudaFree(ptr);
-    
-    if (err != cudaSuccess) {
-	fprintf(stderr, "Fatal error in cuda free, exiting.\n");
-	exit(1);
-    }
+    SAFE_CUDA(cudaFree(ptr));
 }
 
 void safe_cuda_memcpy(void* dst, const void* src, size_t size, enum cudaMemcpyKind kind) {
-    cudaError_t err = cudaMemcpy(dst, src, size, kind);
-
-    if (err != cudaSuccess) {
-	fprintf(stderr, "Fatal error in cuda memcpy, exiting.\n");
-	exit(1);
-    }
+    SAFE_CUDA(cudaMemcpy(dst, src, size, kind));
 }
 
 void memcpy_wrapper(void* dst, const void* src, size_t size, enum cudaMemcpyKind kind) {
