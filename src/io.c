@@ -27,7 +27,7 @@ bool parse_options(Options* options, int argc, char** argv) {
     options->use_gpu = true;
 
     MPI_Comm_size(MPI_COMM_WORLD, &options->node_count);
-    options->thread_count = omp_get_num_threads();
+    options->thread_count = omp_get_max_threads();
 
     while (i < argc) {
 	char* arg = argv[i];

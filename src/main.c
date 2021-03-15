@@ -83,7 +83,6 @@ static void recv_from_neighbour(uint8_t* buffer,
     int neighbour = rank_of_tile(src_pos, gd);
     int tag = (index_of_tile(src_pos, gd) << 16) | my_index;
 
-    // printf("receiving data from tile (%d, %d)\n", tag, srcx, srcy);
     MPI_Recv(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, NULL);
 }
 
@@ -296,7 +295,7 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
 	
 #pragma omp parallel
 	{
-#pragma omp for schedule(dynamic)
+#pragma omp for schedule(static, 1)
 	    for (int ti = 0; ti < tile_count; ti++) {
 		g_device_functions.update_tile(tiles[ti].cells[src_index],
 					       tiles[ti].cells[!src_index],
@@ -369,7 +368,7 @@ int main(int argc, char** argv) {
                    rank == 0 ? 0 : 1,
                    0,
                    &g_worker_comm);
-    
+
     /* Initialize the cells */
     Options options;
     if (!parse_options(&options, argc, argv)) {
@@ -381,8 +380,6 @@ int main(int argc, char** argv) {
 
     SAFE_CUDA(cudaGetDeviceCount(&options.gpu_count));
 
-    /* options.gpu_count = 0; */
-    
     printf("Device count : %d\n", options.gpu_count);
 
     if (options.gpu_count > 0 && options.use_gpu) {
@@ -399,7 +396,6 @@ int main(int argc, char** argv) {
     
     srand(options.seed);
 
-    /* Init tiles and scatter them to worker nodes */
     assert(options.width % options.tile_size == 0);
     assert(options.height % options.tile_size == 0);
 
