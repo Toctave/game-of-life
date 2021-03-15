@@ -57,7 +57,7 @@ struct {
     void* (*malloc)(size_t);
     void (*free)(void*);
     void (*memcpy)(void*, const void*, size_t, enum cudaMemcpyKind);
-    void (*update_tile)(uint8_t*, uint8_t*, int, int);
+    void (*update_tile)(uint8_t**, int, int, int);
 } g_device_functions;
 
 static uint8_t rule(uint8_t alive, uint8_t neighbours) {
@@ -86,13 +86,15 @@ static void recv_from_neighbour(uint8_t* buffer,
     MPI_Recv(buffer, size, MPI_BYTE, neighbour, tag, MPI_COMM_WORLD, NULL);
 }
 
-static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int margin_iterations) {
+static void update_tile_inside(uint8_t **cells,
+			       int wide_size,
+			       int current_step,
+			       int margin_iterations) {
     int neighbour_offsets[8] = {
         -wide_size - 1, -wide_size, -wide_size + 1,
         -1,                                      1,
         wide_size - 1,   wide_size,  wide_size + 1
     };
-
 
     /* Update internal tile */
     for (int growing_margin = 1;
@@ -100,15 +102,18 @@ static void update_tile_inside(uint8_t* src, uint8_t* dst, int wide_size, int ma
 	 growing_margin++) {
 	int start = growing_margin;
 	int end = wide_size - growing_margin;
+
+	int src_index = (current_step + growing_margin - 1) % 2;
 	
 	for (int j = start; j < end; j++) {
 	    for (int i = start; i < end; i++) {
 		int neighbours = 0;
 		int base = j * wide_size + i;
 		for (int k = 0; k < 8; k++) {
-		    neighbours += src[base + neighbour_offsets[k]];
+		    neighbours += cells[src_index][base + neighbour_offsets[k]];
 		}
-		dst[base] = rule(src[base], neighbours);
+		cells[!src_index][base] =
+		    rule(cells[src_index][base], neighbours);
 	    }
 	}
     }
@@ -194,9 +199,9 @@ static void recv_margins(Tile* tile, int src_index, const GridDimensions* gd) {
     }
 }
 
-void update_tile_kernel_call(uint8_t* src,
-			     uint8_t* dst,
+void update_tile_kernel_call(uint8_t **cells,
 			     int wide_size,
+			     int current_step,
 			     int margin_width);
 
 static void worker(int rank, int iter, const GridDimensions* gd) {
@@ -264,12 +269,12 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
     free(recv_buffer);
     
     double tinit = MPI_Wtime();
-    int src_index = 0;
 
     double tsend = 0.0, trecv = 0.0, tupdate = 0.0, twaitsend=0.0;
 
     int current_step = 0;
     while (current_step < iter) {
+	int src_index = current_step % 2;
         double t0 = MPI_Wtime();
         
         for (int ti = 0; ti < tile_count; ti++) {
@@ -297,12 +302,11 @@ static void worker(int rank, int iter, const GridDimensions* gd) {
 	{
 #pragma omp for schedule(static, 1)
 	    for (int ti = 0; ti < tile_count; ti++) {
-		g_device_functions.update_tile(tiles[ti].cells[src_index],
-					       tiles[ti].cells[!src_index],
+		g_device_functions.update_tile(tiles[ti].cells,
 					       gd->wide_size,
+					       current_step,
 					       margin_iterations);
 	    }
-            src_index = !src_index;
         }
 
 	current_step += margin_iterations;

@@ -35,15 +35,20 @@ void update_tile_inside_gpu(uint8_t* src, uint8_t* dst, int wide_size, int margi
 
 extern "C" 
 __host__
-void update_tile_kernel_call(uint8_t* src,
-			     uint8_t* dst,
+void update_tile_kernel_call(uint8_t **cells,
 			     int wide_size,
+			     int current_step,
 			     int margin_iterations) {
     dim3 numBlocks(wide_size / 32 + 1, wide_size / 32 + 1);
     dim3 threadsPerBlocks(32, 32);
     for (int growing_margin = 1;
 	 growing_margin <= margin_iterations;
 	 growing_margin++) {
-	update_tile_inside_gpu<<< numBlocks, threadsPerBlocks >>>(src, dst, wide_size, growing_margin);
+	 int src_index = (current_step + growing_margin - 1) % 2;
+	update_tile_inside_gpu<<< numBlocks, threadsPerBlocks >>>
+	    (cells[src_index],
+	     cells[!src_index],
+	     wide_size,
+	     growing_margin);
     }
 }
