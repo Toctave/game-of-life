@@ -1,6 +1,8 @@
 CC_FLAGS="-I/usr/local/cuda/include -std=c99 -O3 -Wno-missing-braces -fopenmp -Wall"
 LD_FLAGS="-lcudart -L/usr/local/cuda/lib64"
 
+mkdir -p build
+
 # Build MPI/OpenMP files
 mpicc -c -o build/main.o src/main.c $CC_FLAGS
 mpicc -c -o build/io.o src/io.c $CC_FLAGS
